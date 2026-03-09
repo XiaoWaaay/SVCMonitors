@@ -1,0 +1,281 @@
+-- Merging decision tree log ---
+provider#androidx.core.content.FileProvider
+INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:25:9-33:20
+	android:grantUriPermissions
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:29:13-47
+	android:authorities
+		INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:27:13-64
+	android:exported
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:28:13-37
+	android:name
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:26:13-62
+manifest
+ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:2:1-36:12
+INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:2:1-36:12
+INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:2:1-36:12
+INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:2:1-36:12
+MERGED from [androidx.appcompat:appcompat-resources:1.6.1] /Users/bytedance/.gradle/caches/transforms-3/6d18f32609ed8dac684b0a124aff8ffb/transformed/appcompat-resources-1.6.1/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.appcompat:appcompat:1.6.1] /Users/bytedance/.gradle/caches/transforms-3/ad896df5094edaf02d689252808d8011/transformed/appcompat-1.6.1/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.fragment:fragment:1.3.6] /Users/bytedance/.gradle/caches/transforms-3/3a058aff86a0fd3051711a2f09c26dd4/transformed/fragment-1.3.6/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.activity:activity:1.6.0] /Users/bytedance/.gradle/caches/transforms-3/13c4577d7d10042495fd1c2e87e74bff/transformed/activity-1.6.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.drawerlayout:drawerlayout:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/96050d28d0c69559c2d61bbaa6eb7a3c/transformed/drawerlayout-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.emoji2:emoji2-views-helper:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/58050b283f4fe3d6fa0121d187380d6e/transformed/emoji2-views-helper-1.2.0/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.emoji2:emoji2:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/273b6ab2e7a7baa5106e07c8ccec0b96/transformed/emoji2-1.2.0/AndroidManifest.xml:17:1-35:12
+MERGED from [androidx.vectordrawable:vectordrawable-animated:1.1.0] /Users/bytedance/.gradle/caches/transforms-3/e24fae808aa679eef16acbc112d9f7bc/transformed/vectordrawable-animated-1.1.0/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.vectordrawable:vectordrawable:1.1.0] /Users/bytedance/.gradle/caches/transforms-3/8b3bd69c9e02a668b9719277202a3546/transformed/vectordrawable-1.1.0/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.viewpager:viewpager:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/ff5f616193a66ef3a2843ce81aac9303/transformed/viewpager-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.customview:customview:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/c98bc1fc8189a6d24b2d9a82d44ea565/transformed/customview-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.loader:loader:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/ab4bc1114aece0f0837a69e73510b38a/transformed/loader-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:17:1-30:12
+MERGED from [androidx.savedstate:savedstate:1.2.1] /Users/bytedance/.gradle/caches/transforms-3/ad9d7ea3a52e5cd880c49809e65c9e81/transformed/savedstate-1.2.1/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.lifecycle:lifecycle-livedata-core:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/c3fb202f9fcc79409cc192e1bc7efed9/transformed/lifecycle-livedata-core-2.7.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.lifecycle:lifecycle-process:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/dd8f1baa1f8e556fcf1b09c984ed09e7/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:17:1-35:12
+MERGED from [androidx.lifecycle:lifecycle-livedata-core-ktx:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/80dd0fe97fcab1f47600da331fdebf40/transformed/lifecycle-livedata-core-ktx-2.7.0/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.lifecycle:lifecycle-livedata:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/b87b45d9ce2ae8408dfb58745af8c08e/transformed/lifecycle-livedata-2.7.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.lifecycle:lifecycle-runtime:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/10948f769759f6b34b8323e6d00ee95c/transformed/lifecycle-runtime-2.7.0/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.lifecycle:lifecycle-viewmodel:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/01001047a1f0ed97e6c71fec0a5df7ab/transformed/lifecycle-viewmodel-2.7.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/b8ebd6c11e01a68a143328dcd9a3f743/transformed/lifecycle-viewmodel-ktx-2.7.0/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.lifecycle:lifecycle-livedata-ktx:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/571a7c4f07882d45719b51b7b1257e9a/transformed/lifecycle-livedata-ktx-2.7.0/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.lifecycle:lifecycle-viewmodel-savedstate:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/a2d76ad47a491a77bff1d879b5fd5949/transformed/lifecycle-viewmodel-savedstate-2.7.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.core:core-ktx:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/191f0d9a757d79b9487dfc335aa74b76/transformed/core-ktx-1.12.0/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.annotation:annotation-experimental:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/34e23b077bc85a21060d39c1d09e6b0e/transformed/annotation-experimental-1.3.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.cursoradapter:cursoradapter:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/9b7b30e587a53fc767ed842bc96f079c/transformed/cursoradapter-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.interpolator:interpolator:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/bffb466cdc014d99a16152a7afc777fb/transformed/interpolator-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.1] /Users/bytedance/.gradle/caches/transforms-3/2d8fa825f85c042fd736d009ac0a866c/transformed/versionedparcelable-1.1.1/AndroidManifest.xml:17:1-27:12
+MERGED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:17:1-55:12
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/bytedance/.gradle/caches/transforms-3/39ca18a123476b17ffb2bde38acb4b38/transformed/startup-runtime-1.1.1/AndroidManifest.xml:17:1-33:12
+MERGED from [androidx.tracing:tracing:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/0882814fd8e7398ffceff9e87fba5935/transformed/tracing-1.0.0/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.arch.core:core-runtime:2.2.0] /Users/bytedance/.gradle/caches/transforms-3/fab935744465f1693db3f3d1f282089a/transformed/core-runtime-2.2.0/AndroidManifest.xml:17:1-22:12
+	package
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:3:5-33
+		INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml
+	android:versionName
+		INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml
+	android:versionCode
+		INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:2:11-69
+uses-permission#android.permission.QUERY_ALL_PACKAGES
+ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:5:5-77
+	android:name
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:5:22-74
+uses-permission#android.permission.INTERNET
+ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:6:5-67
+	android:name
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:6:22-64
+application
+ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:8:5-35:19
+INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:8:5-35:19
+MERGED from [androidx.emoji2:emoji2:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/273b6ab2e7a7baa5106e07c8ccec0b96/transformed/emoji2-1.2.0/AndroidManifest.xml:23:5-33:19
+MERGED from [androidx.emoji2:emoji2:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/273b6ab2e7a7baa5106e07c8ccec0b96/transformed/emoji2-1.2.0/AndroidManifest.xml:23:5-33:19
+MERGED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:28:5-89
+MERGED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:28:5-89
+MERGED from [androidx.lifecycle:lifecycle-process:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/dd8f1baa1f8e556fcf1b09c984ed09e7/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:23:5-33:19
+MERGED from [androidx.lifecycle:lifecycle-process:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/dd8f1baa1f8e556fcf1b09c984ed09e7/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:23:5-33:19
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.1] /Users/bytedance/.gradle/caches/transforms-3/2d8fa825f85c042fd736d009ac0a866c/transformed/versionedparcelable-1.1.1/AndroidManifest.xml:24:5-25:19
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.1] /Users/bytedance/.gradle/caches/transforms-3/2d8fa825f85c042fd736d009ac0a866c/transformed/versionedparcelable-1.1.1/AndroidManifest.xml:24:5-25:19
+MERGED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:23:5-53:19
+MERGED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:23:5-53:19
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/bytedance/.gradle/caches/transforms-3/39ca18a123476b17ffb2bde38acb4b38/transformed/startup-runtime-1.1.1/AndroidManifest.xml:25:5-31:19
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/bytedance/.gradle/caches/transforms-3/39ca18a123476b17ffb2bde38acb4b38/transformed/startup-runtime-1.1.1/AndroidManifest.xml:25:5-31:19
+	android:extractNativeLibs
+		INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml
+	android:appComponentFactory
+		ADDED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:28:18-86
+	android:supportsRtl
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:13:9-35
+	android:label
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:11:9-41
+	android:roundIcon
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:12:9-63
+	android:icon
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:10:9-58
+	android:allowBackup
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:9:9-35
+	android:theme
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:14:9-67
+activity#com.svcmonitor.app.MainActivity
+ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:16:9-23:20
+	android:exported
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:18:13-36
+	android:name
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:17:13-41
+intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
+ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:19:13-22:29
+action#android.intent.action.MAIN
+ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:20:17-69
+	android:name
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:20:25-66
+category#android.intent.category.LAUNCHER
+ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:21:17-77
+	android:name
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:21:27-74
+meta-data#android.support.FILE_PROVIDER_PATHS
+ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:30:13-32:54
+	android:resource
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:32:17-51
+	android:name
+		ADDED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml:31:17-67
+uses-sdk
+INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml
+INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml
+MERGED from [androidx.appcompat:appcompat-resources:1.6.1] /Users/bytedance/.gradle/caches/transforms-3/6d18f32609ed8dac684b0a124aff8ffb/transformed/appcompat-resources-1.6.1/AndroidManifest.xml:20:5-44
+MERGED from [androidx.appcompat:appcompat-resources:1.6.1] /Users/bytedance/.gradle/caches/transforms-3/6d18f32609ed8dac684b0a124aff8ffb/transformed/appcompat-resources-1.6.1/AndroidManifest.xml:20:5-44
+MERGED from [androidx.appcompat:appcompat:1.6.1] /Users/bytedance/.gradle/caches/transforms-3/ad896df5094edaf02d689252808d8011/transformed/appcompat-1.6.1/AndroidManifest.xml:20:5-44
+MERGED from [androidx.appcompat:appcompat:1.6.1] /Users/bytedance/.gradle/caches/transforms-3/ad896df5094edaf02d689252808d8011/transformed/appcompat-1.6.1/AndroidManifest.xml:20:5-44
+MERGED from [androidx.fragment:fragment:1.3.6] /Users/bytedance/.gradle/caches/transforms-3/3a058aff86a0fd3051711a2f09c26dd4/transformed/fragment-1.3.6/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.fragment:fragment:1.3.6] /Users/bytedance/.gradle/caches/transforms-3/3a058aff86a0fd3051711a2f09c26dd4/transformed/fragment-1.3.6/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.activity:activity:1.6.0] /Users/bytedance/.gradle/caches/transforms-3/13c4577d7d10042495fd1c2e87e74bff/transformed/activity-1.6.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.activity:activity:1.6.0] /Users/bytedance/.gradle/caches/transforms-3/13c4577d7d10042495fd1c2e87e74bff/transformed/activity-1.6.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.drawerlayout:drawerlayout:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/96050d28d0c69559c2d61bbaa6eb7a3c/transformed/drawerlayout-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.drawerlayout:drawerlayout:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/96050d28d0c69559c2d61bbaa6eb7a3c/transformed/drawerlayout-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.emoji2:emoji2-views-helper:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/58050b283f4fe3d6fa0121d187380d6e/transformed/emoji2-views-helper-1.2.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.emoji2:emoji2-views-helper:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/58050b283f4fe3d6fa0121d187380d6e/transformed/emoji2-views-helper-1.2.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.emoji2:emoji2:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/273b6ab2e7a7baa5106e07c8ccec0b96/transformed/emoji2-1.2.0/AndroidManifest.xml:21:5-44
+MERGED from [androidx.emoji2:emoji2:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/273b6ab2e7a7baa5106e07c8ccec0b96/transformed/emoji2-1.2.0/AndroidManifest.xml:21:5-44
+MERGED from [androidx.vectordrawable:vectordrawable-animated:1.1.0] /Users/bytedance/.gradle/caches/transforms-3/e24fae808aa679eef16acbc112d9f7bc/transformed/vectordrawable-animated-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.vectordrawable:vectordrawable-animated:1.1.0] /Users/bytedance/.gradle/caches/transforms-3/e24fae808aa679eef16acbc112d9f7bc/transformed/vectordrawable-animated-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.vectordrawable:vectordrawable:1.1.0] /Users/bytedance/.gradle/caches/transforms-3/8b3bd69c9e02a668b9719277202a3546/transformed/vectordrawable-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.vectordrawable:vectordrawable:1.1.0] /Users/bytedance/.gradle/caches/transforms-3/8b3bd69c9e02a668b9719277202a3546/transformed/vectordrawable-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.viewpager:viewpager:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/ff5f616193a66ef3a2843ce81aac9303/transformed/viewpager-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.viewpager:viewpager:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/ff5f616193a66ef3a2843ce81aac9303/transformed/viewpager-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.customview:customview:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/c98bc1fc8189a6d24b2d9a82d44ea565/transformed/customview-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.customview:customview:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/c98bc1fc8189a6d24b2d9a82d44ea565/transformed/customview-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.loader:loader:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/ab4bc1114aece0f0837a69e73510b38a/transformed/loader-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.loader:loader:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/ab4bc1114aece0f0837a69e73510b38a/transformed/loader-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.savedstate:savedstate:1.2.1] /Users/bytedance/.gradle/caches/transforms-3/ad9d7ea3a52e5cd880c49809e65c9e81/transformed/savedstate-1.2.1/AndroidManifest.xml:20:5-44
+MERGED from [androidx.savedstate:savedstate:1.2.1] /Users/bytedance/.gradle/caches/transforms-3/ad9d7ea3a52e5cd880c49809e65c9e81/transformed/savedstate-1.2.1/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata-core:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/c3fb202f9fcc79409cc192e1bc7efed9/transformed/lifecycle-livedata-core-2.7.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata-core:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/c3fb202f9fcc79409cc192e1bc7efed9/transformed/lifecycle-livedata-core-2.7.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-process:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/dd8f1baa1f8e556fcf1b09c984ed09e7/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:21:5-44
+MERGED from [androidx.lifecycle:lifecycle-process:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/dd8f1baa1f8e556fcf1b09c984ed09e7/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:21:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata-core-ktx:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/80dd0fe97fcab1f47600da331fdebf40/transformed/lifecycle-livedata-core-ktx-2.7.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata-core-ktx:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/80dd0fe97fcab1f47600da331fdebf40/transformed/lifecycle-livedata-core-ktx-2.7.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/b87b45d9ce2ae8408dfb58745af8c08e/transformed/lifecycle-livedata-2.7.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/b87b45d9ce2ae8408dfb58745af8c08e/transformed/lifecycle-livedata-2.7.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-runtime:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/10948f769759f6b34b8323e6d00ee95c/transformed/lifecycle-runtime-2.7.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.lifecycle:lifecycle-runtime:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/10948f769759f6b34b8323e6d00ee95c/transformed/lifecycle-runtime-2.7.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.lifecycle:lifecycle-viewmodel:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/01001047a1f0ed97e6c71fec0a5df7ab/transformed/lifecycle-viewmodel-2.7.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-viewmodel:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/01001047a1f0ed97e6c71fec0a5df7ab/transformed/lifecycle-viewmodel-2.7.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/b8ebd6c11e01a68a143328dcd9a3f743/transformed/lifecycle-viewmodel-ktx-2.7.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/b8ebd6c11e01a68a143328dcd9a3f743/transformed/lifecycle-viewmodel-ktx-2.7.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata-ktx:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/571a7c4f07882d45719b51b7b1257e9a/transformed/lifecycle-livedata-ktx-2.7.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata-ktx:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/571a7c4f07882d45719b51b7b1257e9a/transformed/lifecycle-livedata-ktx-2.7.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.lifecycle:lifecycle-viewmodel-savedstate:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/a2d76ad47a491a77bff1d879b5fd5949/transformed/lifecycle-viewmodel-savedstate-2.7.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-viewmodel-savedstate:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/a2d76ad47a491a77bff1d879b5fd5949/transformed/lifecycle-viewmodel-savedstate-2.7.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.core:core-ktx:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/191f0d9a757d79b9487dfc335aa74b76/transformed/core-ktx-1.12.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.core:core-ktx:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/191f0d9a757d79b9487dfc335aa74b76/transformed/core-ktx-1.12.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.annotation:annotation-experimental:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/34e23b077bc85a21060d39c1d09e6b0e/transformed/annotation-experimental-1.3.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.annotation:annotation-experimental:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/34e23b077bc85a21060d39c1d09e6b0e/transformed/annotation-experimental-1.3.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.cursoradapter:cursoradapter:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/9b7b30e587a53fc767ed842bc96f079c/transformed/cursoradapter-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.cursoradapter:cursoradapter:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/9b7b30e587a53fc767ed842bc96f079c/transformed/cursoradapter-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.interpolator:interpolator:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/bffb466cdc014d99a16152a7afc777fb/transformed/interpolator-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.interpolator:interpolator:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/bffb466cdc014d99a16152a7afc777fb/transformed/interpolator-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.1] /Users/bytedance/.gradle/caches/transforms-3/2d8fa825f85c042fd736d009ac0a866c/transformed/versionedparcelable-1.1.1/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.1] /Users/bytedance/.gradle/caches/transforms-3/2d8fa825f85c042fd736d009ac0a866c/transformed/versionedparcelable-1.1.1/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:21:5-44
+MERGED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:21:5-44
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/bytedance/.gradle/caches/transforms-3/39ca18a123476b17ffb2bde38acb4b38/transformed/startup-runtime-1.1.1/AndroidManifest.xml:21:5-23:41
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/bytedance/.gradle/caches/transforms-3/39ca18a123476b17ffb2bde38acb4b38/transformed/startup-runtime-1.1.1/AndroidManifest.xml:21:5-23:41
+MERGED from [androidx.tracing:tracing:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/0882814fd8e7398ffceff9e87fba5935/transformed/tracing-1.0.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.tracing:tracing:1.0.0] /Users/bytedance/.gradle/caches/transforms-3/0882814fd8e7398ffceff9e87fba5935/transformed/tracing-1.0.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.arch.core:core-runtime:2.2.0] /Users/bytedance/.gradle/caches/transforms-3/fab935744465f1693db3f3d1f282089a/transformed/core-runtime-2.2.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.arch.core:core-runtime:2.2.0] /Users/bytedance/.gradle/caches/transforms-3/fab935744465f1693db3f3d1f282089a/transformed/core-runtime-2.2.0/AndroidManifest.xml:20:5-44
+	android:targetSdkVersion
+		INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/AndroidManifest.xml
+provider#androidx.startup.InitializationProvider
+ADDED from [androidx.emoji2:emoji2:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/273b6ab2e7a7baa5106e07c8ccec0b96/transformed/emoji2-1.2.0/AndroidManifest.xml:24:9-32:20
+MERGED from [androidx.lifecycle:lifecycle-process:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/dd8f1baa1f8e556fcf1b09c984ed09e7/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:24:9-32:20
+MERGED from [androidx.lifecycle:lifecycle-process:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/dd8f1baa1f8e556fcf1b09c984ed09e7/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:24:9-32:20
+MERGED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:24:9-32:20
+MERGED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:24:9-32:20
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/bytedance/.gradle/caches/transforms-3/39ca18a123476b17ffb2bde38acb4b38/transformed/startup-runtime-1.1.1/AndroidManifest.xml:26:9-30:34
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/bytedance/.gradle/caches/transforms-3/39ca18a123476b17ffb2bde38acb4b38/transformed/startup-runtime-1.1.1/AndroidManifest.xml:26:9-30:34
+	tools:node
+		ADDED from [androidx.emoji2:emoji2:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/273b6ab2e7a7baa5106e07c8ccec0b96/transformed/emoji2-1.2.0/AndroidManifest.xml:28:13-31
+	android:authorities
+		ADDED from [androidx.emoji2:emoji2:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/273b6ab2e7a7baa5106e07c8ccec0b96/transformed/emoji2-1.2.0/AndroidManifest.xml:26:13-68
+	android:exported
+		ADDED from [androidx.emoji2:emoji2:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/273b6ab2e7a7baa5106e07c8ccec0b96/transformed/emoji2-1.2.0/AndroidManifest.xml:27:13-37
+	android:name
+		ADDED from [androidx.emoji2:emoji2:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/273b6ab2e7a7baa5106e07c8ccec0b96/transformed/emoji2-1.2.0/AndroidManifest.xml:25:13-67
+meta-data#androidx.emoji2.text.EmojiCompatInitializer
+ADDED from [androidx.emoji2:emoji2:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/273b6ab2e7a7baa5106e07c8ccec0b96/transformed/emoji2-1.2.0/AndroidManifest.xml:29:13-31:52
+	android:value
+		ADDED from [androidx.emoji2:emoji2:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/273b6ab2e7a7baa5106e07c8ccec0b96/transformed/emoji2-1.2.0/AndroidManifest.xml:31:17-49
+	android:name
+		ADDED from [androidx.emoji2:emoji2:1.2.0] /Users/bytedance/.gradle/caches/transforms-3/273b6ab2e7a7baa5106e07c8ccec0b96/transformed/emoji2-1.2.0/AndroidManifest.xml:30:17-75
+permission#${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+ADDED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:22:5-24:47
+	android:protectionLevel
+		ADDED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:24:9-44
+	android:name
+		ADDED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:23:9-81
+permission#com.svcmonitor.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+ADDED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:22:5-24:47
+	android:protectionLevel
+		ADDED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:24:9-44
+	android:name
+		ADDED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:23:9-81
+uses-permission#${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+ADDED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:26:5-97
+	android:name
+		ADDED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:26:22-94
+uses-permission#com.svcmonitor.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+ADDED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:26:5-97
+	android:name
+		ADDED from [androidx.core:core:1.12.0] /Users/bytedance/.gradle/caches/transforms-3/4e116a93cb58fedfe700f980927d2f70/transformed/core-1.12.0/AndroidManifest.xml:26:22-94
+meta-data#androidx.lifecycle.ProcessLifecycleInitializer
+ADDED from [androidx.lifecycle:lifecycle-process:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/dd8f1baa1f8e556fcf1b09c984ed09e7/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:29:13-31:52
+	android:value
+		ADDED from [androidx.lifecycle:lifecycle-process:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/dd8f1baa1f8e556fcf1b09c984ed09e7/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:31:17-49
+	android:name
+		ADDED from [androidx.lifecycle:lifecycle-process:2.7.0] /Users/bytedance/.gradle/caches/transforms-3/dd8f1baa1f8e556fcf1b09c984ed09e7/transformed/lifecycle-process-2.7.0/AndroidManifest.xml:30:17-78
+meta-data#androidx.profileinstaller.ProfileInstallerInitializer
+ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:29:13-31:52
+	android:value
+		ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:31:17-49
+	android:name
+		ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:30:17-85
+receiver#androidx.profileinstaller.ProfileInstallReceiver
+ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:34:9-52:20
+	android:enabled
+		ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:37:13-35
+	android:exported
+		ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:38:13-36
+	android:permission
+		ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:39:13-57
+	android:directBootAware
+		ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:36:13-44
+	android:name
+		ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:35:13-76
+intent-filter#action:name:androidx.profileinstaller.action.INSTALL_PROFILE
+ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:40:13-42:29
+action#androidx.profileinstaller.action.INSTALL_PROFILE
+ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:17-91
+	android:name
+		ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:25-88
+intent-filter#action:name:androidx.profileinstaller.action.SKIP_FILE
+ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:43:13-45:29
+action#androidx.profileinstaller.action.SKIP_FILE
+ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:17-85
+	android:name
+		ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:25-82
+intent-filter#action:name:androidx.profileinstaller.action.SAVE_PROFILE
+ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:46:13-48:29
+action#androidx.profileinstaller.action.SAVE_PROFILE
+ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:17-88
+	android:name
+		ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:25-85
+intent-filter#action:name:androidx.profileinstaller.action.BENCHMARK_OPERATION
+ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:49:13-51:29
+action#androidx.profileinstaller.action.BENCHMARK_OPERATION
+ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:17-95
+	android:name
+		ADDED from [androidx.profileinstaller:profileinstaller:1.3.0] /Users/bytedance/.gradle/caches/transforms-3/669db188516f5bbb716cb094659db04a/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:25-92

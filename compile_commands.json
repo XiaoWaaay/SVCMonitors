@@ -1,0 +1,97 @@
+[
+ {
+  "directory": "D:\\Android_tools\\apatch_tools\\xiaojia-hide",
+  "arguments": [
+   "rel1binaarch64-none-elf-gcc",
+   "-I./KernelPatch\\kernel\\.",
+   "-I./KernelPatch\\kernel\\include",
+   "-I./KernelPatch\\kernel\\patch/include",
+   "-I./KernelPatch\\kernel\\linux/include",
+   "-I./KernelPatch\\kernel\\linux/arch/arm64/include",
+   "-I./KernelPatch\\kernel\\linux/tools/arch/arm64/include",
+   "-I./src/include",
+   "-c",
+   "-O2",
+   "-o",
+   "src/main.o",
+   "src/main.c"
+  ],
+  "file": "src/main.c"
+ },
+ {
+  "directory": "D:\\Android_tools\\apatch_tools\\xiaojia-hide",
+  "arguments": [
+   "rel1binaarch64-none-elf-gcc",
+   "-I./KernelPatch\\kernel\\.",
+   "-I./KernelPatch\\kernel\\include",
+   "-I./KernelPatch\\kernel\\patch/include",
+   "-I./KernelPatch\\kernel\\linux/include",
+   "-I./KernelPatch\\kernel\\linux/arch/arm64/include",
+   "-I./KernelPatch\\kernel\\linux/tools/arch/arm64/include",
+   "-I./src/include",
+   "-c",
+   "-O2",
+   "-o",
+   "src/hide_proc.o",
+   "src/hide_proc.c"
+  ],
+  "file": "src/hide_proc.c"
+ },
+ {
+  "directory": "D:\\Android_tools\\apatch_tools\\xiaojia-hide",
+  "arguments": [
+   "rel1binaarch64-none-elf-gcc",
+   "-I./KernelPatch\\kernel\\.",
+   "-I./KernelPatch\\kernel\\include",
+   "-I./KernelPatch\\kernel\\patch/include",
+   "-I./KernelPatch\\kernel\\linux/include",
+   "-I./KernelPatch\\kernel\\linux/arch/arm64/include",
+   "-I./KernelPatch\\kernel\\linux/tools/arch/arm64/include",
+   "-I./src/include",
+   "-c",
+   "-O2",
+   "-o",
+   "src/hide_debbuger.o",
+   "src/hide_debbuger.c"
+  ],
+  "file": "src/hide_debbuger.c"
+ },
+ {
+  "directory": "D:\\Android_tools\\apatch_tools\\xiaojia-hide",
+  "arguments": [
+   "rel1binaarch64-none-elf-gcc",
+   "-I./KernelPatch\\kernel\\.",
+   "-I./KernelPatch\\kernel\\include",
+   "-I./KernelPatch\\kernel\\patch/include",
+   "-I./KernelPatch\\kernel\\linux/include",
+   "-I./KernelPatch\\kernel\\linux/arch/arm64/include",
+   "-I./KernelPatch\\kernel\\linux/tools/arch/arm64/include",
+   "-I./src/include",
+   "-c",
+   "-O2",
+   "-o",
+   "src/xjutils.o",
+   "src/xjutils.c"
+  ],
+  "file": "src/xjutils.c"
+ },
+ {
+  "directory": "D:\\Android_tools\\apatch_tools\\xiaojia-hide",
+  "arguments": [
+   "rel1binaarch64-none-elf-gcc",
+   "-I./KernelPatch\\kernel\\.",
+   "-I./KernelPatch\\kernel\\include",
+   "-I./KernelPatch\\kernel\\patch/include",
+   "-I./KernelPatch\\kernel\\linux/include",
+   "-I./KernelPatch\\kernel\\linux/arch/arm64/include",
+   "-I./KernelPatch\\kernel\\linux/tools/arch/arm64/include",
+   "-I./src/include",
+   "-c",
+   "-O2",
+   "-o",
+   "src/hwbp.o",
+   "src/hwbp.c"
+  ],
+  "file": "src/hwbp.c"
+ }
+]
