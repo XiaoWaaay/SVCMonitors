@@ -4,7 +4,9 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.text.Editable
 import android.text.TextUtils
+import android.text.TextWatcher
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -40,8 +42,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvMonState: TextView
     private lateinit var tvMsg: TextView
     private lateinit var btnStartStop: Button
+    private lateinit var etAppSearch: EditText
     private lateinit var spinnerApp: Spinner
-    private lateinit var spinnerPreset: Spinner
+    private lateinit var tvDashNrCount: TextView
+    private lateinit var tvDashNrList: TextView
 
     // Events tab
     private lateinit var tvEvtCount: TextView
@@ -50,17 +54,27 @@ class MainActivity : AppCompatActivity() {
 
     // Settings tab
     private lateinit var switchTier2: Switch
+    private lateinit var switchHideSystemApps: Switch
+    private lateinit var switchOnlyLaunchableApps: Switch
     private lateinit var tvSuperKey: EditText
 
     // Filter tab
     private lateinit var tvNrCount: TextView
     private lateinit var tvNrList: TextView
+    private lateinit var llSelectedNrs: LinearLayout
+    private lateinit var switchDoFilpOpen: Switch
     private val nrNameViews = HashMap<Int, TextView>()
     private lateinit var filterListContainer: LinearLayout
     private var hookedNrSet: Set<Int> = emptySet()
+    private var currentNrList: List<Int> = emptyList()
 
     /* ── app list data ────────────────────────────────────────── */
     private var appList: List<AppInfo> = emptyList()
+    private var appSearchQuery: String = ""
+    private var hideSystemApps: Boolean = false
+    private var onlyLaunchableApps: Boolean = false
+
+    private val prefs by lazy { getSharedPreferences("svcmon_prefs", MODE_PRIVATE) }
 
     /* ── colors ───────────────────────────────────────────────── */
     private val cPrimary = Color.parseColor("#1565C0")
@@ -77,8 +91,10 @@ class MainActivity : AppCompatActivity() {
         vm = ViewModelProvider(this)[MainViewModel::class.java]
         logExporter = LogExporter(this)
 
-        // Load app list
-        appList = AppResolver.getInstalledApps(this)
+        hideSystemApps = prefs.getBoolean("hide_system_apps", false)
+        onlyLaunchableApps = prefs.getBoolean("only_launchable_apps", false)
+        vm.doFilpOpenEnabled = prefs.getBoolean("do_filp_open", true)
+        appList = loadVisibleApps(appSearchQuery)
 
         // Pre-build ALL tab views FIRST (before observeViewModel!)
         val dashboardView = buildDashboardTab()
@@ -203,9 +219,20 @@ class MainActivity : AppCompatActivity() {
         // Step 1: Select app
         col.addView(makeCard {
             addView(makeLabel("步骤 1: 选择目标应用"))
+            etAppSearch = EditText(this@MainActivity).apply {
+                hint = "搜索应用名 / 包名"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                addTextChangedListener(object : TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                    override fun afterTextChanged(s: Editable?) {
+                        appSearchQuery = s?.toString()?.trim().orEmpty()
+                        refreshAppSpinner()
+                    }
+                })
+            }
+            addView(etAppSearch)
             spinnerApp = Spinner(this@MainActivity).apply {
-                val names = listOf("— 请选择 —") + appList.map { "${it.label} (${it.packageName})" }
-                adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, names)
                 onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                     override fun onItemSelected(parent: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                         vm.selectedApp = if (pos > 0) appList[pos - 1] else null
@@ -214,22 +241,17 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             addView(spinnerApp)
+            refreshAppSpinner()
         })
 
-        // Step 2: Select preset
+        // Step 2: Show selected NRs (managed in Filter tab)
         col.addView(makeCard {
-            addView(makeLabel("步骤 2: 选择监控预设"))
-            spinnerPreset = Spinner(this@MainActivity).apply {
-                val presetNames = StatusParser.presets.map { "${it.name} — ${it.description}" }
-                adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, presetNames)
-                onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                    override fun onItemSelected(parent: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                        vm.selectedPreset = StatusParser.presets[pos].id
-                    }
-                    override fun onNothingSelected(parent: AdapterView<*>?) {}
-                }
-            }
-            addView(spinnerPreset)
+            addView(makeLabel("步骤 2: 已选系统调用（在「过滤」页管理）"))
+            tvDashNrCount = makeValue("已选: 0 个系统调用"); addView(tvDashNrCount)
+            tvDashNrList = makeValue("NR列表: (空)").apply {
+                maxLines = 6
+                ellipsize = TextUtils.TruncateAt.END
+            }; addView(tvDashNrList)
         })
 
         // Step 3: Start/Stop button
@@ -271,12 +293,47 @@ class MainActivity : AppCompatActivity() {
         }
 
         col.addView(makeCard {
+            addView(makeLabel("额外 Hook"))
+            switchDoFilpOpen = Switch(this@MainActivity).apply {
+                text = "开启 do_filp_open（更底层 open 路径）"
+                isChecked = prefs.getBoolean("do_filp_open", true)
+                setOnCheckedChangeListener { _, checked ->
+                    prefs.edit().putBoolean("do_filp_open", checked).apply()
+                    vm.setDoFilpOpen(checked)
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(4) }
+            }
+            addView(switchDoFilpOpen)
+        })
+
+        col.addView(makeCard {
             addView(makeLabel("当前 NR 过滤器"))
             tvNrCount = makeValue("已选: 0 个系统调用"); addView(tvNrCount)
             tvNrList = makeValue("NR列表: (空)").apply {
                 maxLines = 10
                 ellipsize = TextUtils.TruncateAt.END
             }; addView(tvNrList)
+            llSelectedNrs = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(6) }
+            }
+            addView(llSelectedNrs)
+            addView(Button(this@MainActivity).apply {
+                text = "清空已选 NR"
+                setTextColor(cRed)
+                isAllCaps = false
+                setOnClickListener { vm.disableAll() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(6) }
+            })
         })
 
         // Preset quick-apply
@@ -288,8 +345,7 @@ class MainActivity : AppCompatActivity() {
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                     isAllCaps = false
                     setOnClickListener {
-                        vm.selectedPreset = preset.id
-                        vm.applyPreset(preset.id)
+                        applyPresetUi(preset.id)
                         tvMsg.text = "提示: 已应用预设 ${preset.name}"
                     }
                     layoutParams = LinearLayout.LayoutParams(
@@ -319,7 +375,6 @@ class MainActivity : AppCompatActivity() {
                     if (nr != null) {
                         if (hookedNrSet.isNotEmpty() && !hookedNrSet.contains(nr)) {
                             tvMsg.text = "提示: NR 未被 hook，可能不会有事件"
-                            return@setOnClickListener
                         }
                         vm.addNr(nr)
                         etNr.text.clear()
@@ -500,6 +555,39 @@ class MainActivity : AppCompatActivity() {
             addView(switchTier2)
         })
 
+        col.addView(makeCard {
+            addView(makeLabel("应用列表"))
+            switchHideSystemApps = Switch(this@MainActivity).apply {
+                text = "隐藏系统应用"
+                isChecked = hideSystemApps
+                setOnCheckedChangeListener { _, checked ->
+                    hideSystemApps = checked
+                    prefs.edit().putBoolean("hide_system_apps", checked).apply()
+                    refreshAppSpinner()
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(6) }
+            }
+            addView(switchHideSystemApps)
+
+            switchOnlyLaunchableApps = Switch(this@MainActivity).apply {
+                text = "仅显示可启动应用"
+                isChecked = onlyLaunchableApps
+                setOnCheckedChangeListener { _, checked ->
+                    onlyLaunchableApps = checked
+                    prefs.edit().putBoolean("only_launchable_apps", checked).apply()
+                    refreshAppSpinner()
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(4) }
+            }
+            addView(switchOnlyLaunchableApps)
+        })
+
         // About
         col.addView(makeCard {
             addView(makeLabel("关于"))
@@ -511,6 +599,36 @@ class MainActivity : AppCompatActivity() {
 
         sv.addView(col)
         return sv
+    }
+
+    private fun loadVisibleApps(query: String): List<AppInfo> {
+        return if (query.isBlank()) {
+            AppResolver.getAllApps(this, hideSystemApps = hideSystemApps, onlyLaunchableApps = onlyLaunchableApps)
+        } else {
+            AppResolver.searchApps(
+                this,
+                query = query,
+                hideSystemApps = hideSystemApps,
+                onlyLaunchableApps = onlyLaunchableApps
+            )
+        }
+    }
+
+    private fun refreshAppSpinner() {
+        val prevUid = vm.selectedApp?.uid
+        appList = loadVisibleApps(appSearchQuery)
+        val names = listOf("— 请选择 —") + appList.map { "${it.label} (${it.packageName})" }
+        val adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, names)
+        spinnerApp.adapter = adapter
+
+        val idx = if (prevUid != null) appList.indexOfFirst { it.uid == prevUid } else -1
+        if (idx >= 0) {
+            spinnerApp.setSelection(idx + 1, false)
+            vm.selectedApp = appList[idx]
+        } else {
+            spinnerApp.setSelection(0, false)
+            vm.selectedApp = null
+        }
     }
 
     /* ══════════════════════════════════════════════════════════════
@@ -527,6 +645,10 @@ class MainActivity : AppCompatActivity() {
                 tvStatus.setTextColor(if (s.enabled) cGreen else cRed)
                 tvNrCount.text = "已选: ${s.nrCount} 个系统调用"
                 tvNrList.text = "NR列表: ${s.nrList.joinToString(", ") { "${StatusParser.nrToName(it)}($it)" }}"
+                tvDashNrCount.text = "已选: ${s.nrCount} 个系统调用"
+                tvDashNrList.text = "NR列表: ${s.nrList.joinToString(", ") { "${StatusParser.nrToName(it)}($it)" }}"
+                currentNrList = s.nrList
+                renderSelectedNrs(s.nrList)
                 switchTier2.isChecked = s.tier2
                 refreshNrHighlights(s.nrList)
                 renderFilterList(s.hooks)
@@ -689,6 +811,17 @@ class MainActivity : AppCompatActivity() {
                 appendLine()
                 appendLine("═══ 解析结果 ═══")
                 appendLine(evt.desc)
+
+                val addrs = extractHexAddrs(evt.desc).take(8)
+                if (addrs.isNotEmpty()) {
+                    appendLine()
+                    appendLine("═══ desc 地址解析 ═══")
+                    addrs.forEach { a ->
+                        val abs = "0x${java.lang.Long.toHexString(a)}"
+                        val so = resolveAddress(evt.pid, a)
+                        appendLine(if (so.isNotEmpty()) "$abs -> $so" else "$abs -> unmapped")
+                    }
+                }
             }
 
             AlertDialog.Builder(this@MainActivity)
@@ -757,7 +890,12 @@ class MainActivity : AppCompatActivity() {
                 tvMsg.text = "提示: 请先选择目标应用"
                 return
             }
-            vm.startMonitoring(app.uid, vm.selectedPreset)
+            val nrs = currentNrList
+            if (nrs.isEmpty()) {
+                vm.startMonitoring(app.uid)
+            } else {
+                vm.startMonitoringWithNrs(app.uid, nrs)
+            }
         }
     }
 
@@ -819,20 +957,39 @@ class MainActivity : AppCompatActivity() {
     private fun renderFilterList(hooks: List<StatusParser.HookInfo>) {
         filterListContainer.removeAllViews()
         nrNameViews.clear()
-        val hooked = hooks.map { it.nr }.toHashSet()
-        hookedNrSet = hooked
-        if (hooked.isEmpty()) {
+        val syscallHooked = hooks.mapNotNull { if (it.nr >= 0) it.nr else null }.toHashSet()
+        hookedNrSet = syscallHooked
+        val nonSysHooks = hooks.filter { it.nr < 0 }
+        if (syscallHooked.isEmpty() && nonSysHooks.isEmpty()) {
             filterListContainer.addView(TextView(this).apply {
-                text = "暂无已安装的系统调用 Hook"
+                text = "暂无已安装的 Hook"
                 setTextColor(cSecondary)
                 setPadding(0, dp(4), 0, dp(4))
             })
             return
         }
 
+        if (nonSysHooks.isNotEmpty()) {
+            filterListContainer.addView(TextView(this).apply {
+                text = "🔧 其他 Hook"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setTextColor(cPrimary)
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, dp(8), 0, dp(4))
+            })
+            nonSysHooks.forEach { h ->
+                filterListContainer.addView(TextView(this).apply {
+                    text = "${h.name}  (${h.method})"
+                    setTextColor(cText)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setPadding(dp(8), dp(2), 0, dp(2))
+                })
+            }
+        }
+
         val used = HashSet<Int>()
         StatusParser.categories.forEach { cat ->
-            val list = cat.syscalls.filter { hooked.contains(it.nr) }
+            val list = cat.syscalls.filter { syscallHooked.contains(it.nr) }
             if (list.isEmpty()) return@forEach
             filterListContainer.addView(TextView(this).apply {
                 text = "${cat.icon} ${cat.name}"
@@ -918,6 +1075,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun renderSelectedNrs(nrs: List<Int>) {
+        llSelectedNrs.removeAllViews()
+        if (nrs.isEmpty()) {
+            llSelectedNrs.addView(TextView(this).apply {
+                text = "未选择任何系统调用"
+                setTextColor(cSecondary)
+            })
+            return
+        }
+
+        nrs.sorted().forEach { nr ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(2), 0, dp(2))
+            }
+            row.addView(TextView(this).apply {
+                text = "${StatusParser.nrToName(nr)}($nr)"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setTextColor(cText)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            row.addView(Button(this).apply {
+                text = "删除"
+                setTextColor(cRed)
+                isAllCaps = false
+                setOnClickListener { vm.removeNr(nr) }
+            })
+            llSelectedNrs.addView(row)
+        }
+    }
+
+    private fun applyPresetUi(presetId: String) {
+        vm.selectedPreset = presetId
+        vm.applyPreset(presetId)
+    }
+
     private fun nrUsesFd(nr: Int): Boolean {
         return when (nr) {
             57, 62, 63, 64, 65, 66, 71, 80, 29, 46, 45, 43, 25 -> true
@@ -925,15 +1119,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private data class MapEntry(val start: Long, val end: Long, val fileOffset: Long, val path: String)
+    private data class MapRegion(val start: Long, val end: Long, val mapOffset: Long, val path: String)
+    private data class MapsSnapshot(val tsMs: Long, val regions: List<MapRegion>)
+    private val mapsCache = HashMap<Int, MapsSnapshot>()
+    private val mapsCacheTtlMs = 5000L
 
     private suspend fun resolveAddress(pid: Int, addr: Long): String {
         if (pid <= 0 || addr == 0L) return ""
-        val maps = KpmBridge.readProcMaps(pid)
-        if (maps.isBlank()) return ""
-        val entry = findMapEntry(maps, addr) ?: return ""
-        val name = if (entry.path.isNotBlank()) entry.path.substringAfterLast('/') else "[anon]"
-        return "$name+0x${java.lang.Long.toHexString(entry.fileOffset)}"
+        val regions = getMapsRegions(pid) ?: return ""
+        val region = findMapRegion(regions, addr) ?: return ""
+        val fileOffset = (addr - region.start) + region.mapOffset
+        val name = if (region.path.isNotBlank()) region.path.substringAfterLast('/') else "[anon]"
+        return "$name+0x${java.lang.Long.toHexString(fileOffset)}"
     }
 
     private suspend fun formatAddrSoOffset(pid: Int, addr: Long): String {
@@ -942,7 +1139,22 @@ class MainActivity : AppCompatActivity() {
         return if (so.isNotEmpty()) "$so ($abs)" else "$abs (unmapped)"
     }
 
-    private fun findMapEntry(maps: String, addr: Long): MapEntry? {
+    private suspend fun getMapsRegions(pid: Int): List<MapRegion>? {
+        val now = System.currentTimeMillis()
+        val cached = mapsCache[pid]
+        if (cached != null && now - cached.tsMs <= mapsCacheTtlMs) {
+            return cached.regions
+        }
+
+        val maps = KpmBridge.readProcMaps(pid)
+        if (maps.isBlank()) return null
+        val regions = parseMapsRegions(maps)
+        mapsCache[pid] = MapsSnapshot(now, regions)
+        return regions
+    }
+
+    private fun parseMapsRegions(maps: String): List<MapRegion> {
+        val out = ArrayList<MapRegion>(256)
         val lines = maps.split('\n')
         for (line in lines) {
             if (line.isBlank()) continue
@@ -955,12 +1167,29 @@ class MainActivity : AppCompatActivity() {
             if (dash <= 0) continue
             val start = range.substring(0, dash).toLongOrNull(16) ?: continue
             val end = range.substring(dash + 1).toLongOrNull(16) ?: continue
-            if (addr < start || addr >= end) continue
             val offset = offStr.toLongOrNull(16) ?: 0L
-            val fileOffset = (addr - start) + offset
-            return MapEntry(start, end, fileOffset, path)
+            out.add(MapRegion(start = start, end = end, mapOffset = offset, path = path))
+        }
+        return out
+    }
+
+    private fun findMapRegion(regions: List<MapRegion>, addr: Long): MapRegion? {
+        for (r in regions) {
+            if (addr >= r.start && addr < r.end) return r
         }
         return null
+    }
+
+    private fun extractHexAddrs(text: String): List<Long> {
+        val re = Regex("0x[0-9a-fA-F]{6,16}")
+        val seen = LinkedHashSet<Long>()
+        for (m in re.findAll(text)) {
+            val raw = m.value.substring(2)
+            val v = raw.toLongOrNull(16) ?: continue
+            if (v != 0L) seen.add(v)
+            if (seen.size >= 16) break
+        }
+        return seen.toList()
     }
 
     /* helper for filter tab buttons to launch coroutine */

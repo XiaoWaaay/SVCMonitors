@@ -10,11 +10,7 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 
 /**
- * KpmBridge v8.0.1 — 3-phase communication with KPM module.
- *
- * Phase 0: rm -f /data/local/tmp/svc_out.json
- * Phase 1: kpatch <superkey> kpm ctl0 svc_monitor <command>
- * Phase 2: cat /data/local/tmp/svc_out.json
+     * KpmBridge v8.1.0 — ctl0 output first.
  *
  * FIX: Use sh -c with properly escaped shell command string
  * to avoid argument splitting issues with Runtime.exec(String[]).
@@ -28,7 +24,7 @@ object KpmBridge {
     private const val TAG = "KpmBridge"
     private const val KPATCH = "/data/adb/ap/bin/kpatch"
     private const val MODULE = "svc_monitor"
-    private const val OUT_FILE = "/data/local/tmp/svc_out.json"
+    private const val EVENT_FILE = "/data/local/tmp/svc_events.jsonl"
     private var superKey = "XiaoLu0129"
     private val mutex = Mutex()
 
@@ -61,41 +57,19 @@ object KpmBridge {
     }
 
     /**
-     * Core 3-phase execution.
+     * Core execution.
      *
-     * The command string (e.g. "uid 10234") is passed to kpatch as a single
-     * argument. Since kpatch ctl0 concatenates all remaining args after the
-     * module name into one string, we do NOT need to quote it specially —
-     * just pass it directly as part of the shell command.
-     *
-     * Shell command: /path/kpatch SUPERKEY kpm ctl0 svc_monitor uid 10234
-     * kpatch will receive args: [SUPERKEY, kpm, ctl0, svc_monitor, uid, 10234]
-     * and internally join "uid 10234" as the ctl0 args string.
-     *
-     * IMPORTANT: If kpatch does NOT join remaining args (i.e. only takes
-     * exactly one arg after module name), we need to quote:
+     * IMPORTANT: If kpatch does NOT join remaining args (i.e. only takes exactly
+     * one arg after module name), we need to quote:
      *   /path/kpatch SUPERKEY kpm ctl0 svc_monitor 'uid 10234'
      * We use single quotes to be safe.
      */
     private suspend fun execute(command: String): KpmResult = mutex.withLock {
         withContext(Dispatchers.IO) {
             try {
-                shellExec("rm -f $OUT_FILE")
-
                 val shellCmd = "$KPATCH $superKey kpm ctl0 $MODULE '$command'"
                 val (exitCode, directOutput) = shellExec(shellCmd)
-
-                delay(150)
-
-                val (_, fileOutput) = shellExec("cat $OUT_FILE 2>/dev/null")
-
-                val output = when {
-                    fileOutput.isNotEmpty() && fileOutput.startsWith("{") -> fileOutput
-                    directOutput.isNotEmpty() && directOutput.startsWith("{") -> directOutput
-                    fileOutput.isNotEmpty() -> fileOutput
-                    directOutput.isNotEmpty() -> directOutput
-                    else -> ""
-                }
+                val output = directOutput
 
                 if (output.isNotEmpty()) {
                     val simple = StatusParser.parseSimple(output)
@@ -165,6 +139,42 @@ object KpmBridge {
     suspend fun drain(max: Int = 100) = execute("drain $max")
     suspend fun events() = execute("events")
     suspend fun clear() = execute("clear")
+
+    suspend fun setDoFilpOpen(enabled: Boolean) = execute(if (enabled) "filp_open on" else "filp_open off")
+
+    fun getEventFilePath(): String = EVENT_FILE
+
+    suspend fun eventFileSize(): Long = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            val (_, out) = shellExec("wc -c < $EVENT_FILE 2>/dev/null")
+            out.trim().toLongOrNull() ?: 0L
+        }
+    }
+
+    suspend fun readEventFile(offset: Long, maxBytes: Int = 131072): String = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            if (offset < 0) return@withContext ""
+            val count = if (maxBytes <= 0) 0 else maxBytes
+            if (count == 0) return@withContext ""
+            val (_, out) = shellExec("dd if=$EVENT_FILE bs=1 skip=$offset count=$count 2>/dev/null")
+            out
+        }
+    }
+
+    suspend fun truncateEventFile(): Boolean = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            val (code, _) = shellExec(": > $EVENT_FILE 2>/dev/null")
+            code == 0
+        }
+    }
+
+    suspend fun rotateEventFile(): Boolean = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            val ts = System.currentTimeMillis()
+            val (code, _) = shellExec("cp $EVENT_FILE $EVENT_FILE.$ts 2>/dev/null && : > $EVENT_FILE 2>/dev/null")
+            code == 0
+        }
+    }
 
     suspend fun readProcMaps(pid: Int): String = mutex.withLock {
         withContext(Dispatchers.IO) {

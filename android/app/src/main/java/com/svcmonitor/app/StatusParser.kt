@@ -152,6 +152,36 @@ object StatusParser {
         }
     }
 
+    fun parseEventLines(text: String): List<SvcEvent> {
+        val out = ArrayList<SvcEvent>()
+        val lines = text.split('\n')
+        for (raw in lines) {
+            val line = raw.trim()
+            if (line.isEmpty()) continue
+            if (!line.startsWith("{")) continue
+            try {
+                val e = JSONObject(line)
+                out.add(SvcEvent(
+                    seq = e.optLong("seq", 0),
+                    nr = e.optInt("nr"),
+                    name = e.optString("name", ""),
+                    pid = e.optInt("pid"),
+                    uid = e.optInt("uid"),
+                    comm = e.optString("comm", ""),
+                    pc = e.optLong("pc", 0),
+                    caller = e.optLong("caller", 0),
+                    cloneFn = e.optLong("clone_fn", 0),
+                    a0 = e.optLong("a0"), a1 = e.optLong("a1"),
+                    a2 = e.optLong("a2"), a3 = e.optLong("a3"),
+                    a4 = e.optLong("a4"), a5 = e.optLong("a5"),
+                    desc = e.optString("desc", "")
+                ))
+            } catch (_: Exception) {
+            }
+        }
+        return out
+    }
+
     fun parseSimple(json: String): SimpleResult {
         return try {
             val j = JSONObject(json)
@@ -199,6 +229,7 @@ object StatusParser {
         )),
         SyscallCategory("进程管理", "⚙", listOf(
             SyscallEntry(220, "clone", "创建进程/线程"),
+            SyscallEntry(435, "clone3", "创建进程/线程(新版)"),
             SyscallEntry(221, "execve", "执行程序"),
             SyscallEntry(281, "execveat", "执行程序(扩展)"),
             SyscallEntry(93, "exit", "退出进程"),
@@ -212,6 +243,7 @@ object StatusParser {
             SyscallEntry(226, "mprotect", "修改内存保护"),
             SyscallEntry(215, "munmap", "释放内存映射"),
             SyscallEntry(214, "brk", "调整堆大小"),
+            SyscallEntry(232, "mincore", "查询页面驻留"),
             SyscallEntry(233, "madvise", "内存使用建议"),
             SyscallEntry(279, "memfd_create", "创建匿名文件"),
             SyscallEntry(270, "process_vm_readv", "读取进程内存"),

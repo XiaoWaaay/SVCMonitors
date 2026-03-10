@@ -29,36 +29,52 @@
  *   - raw_syscall0-6
  */
 
-#include <compiler.h>
-#include <kpmodule.h>
-#include <linux/printk.h>
-#include <linux/kernel.h>
-#include <asm-generic/unistd.h>
-#include <linux/uaccess.h>
-#include <syscall.h>
-#include <linux/string.h>
-#include <kputils.h>
-#include <asm/current.h>
-#include <linux/sched.h>
-#include <asm/ptrace.h>
+#include <compiler.h>        // KernelPatch 编译器宏
+#include <kpmodule.h>        // KPM 模块框架 (KPM_NAME/KPM_INIT/KPM_CTL0/KPM_EXIT)
+#include <linux/printk.h>    // printk 内核日志
+#include <linux/kernel.h>    // snprintf 等内核工具函数
+#include <asm-generic/unistd.h> // __NR_openat 等 syscall 号定义
+#include <linux/uaccess.h>   // 用户空间内存访问相关
+#include <syscall.h>         // KernelPatch SDK: syscall_argn, fp_hook_syscalln, has_syscall_wrapper 等
+#include <linux/string.h>    // strcmp, strncmp, strlen
+#include <kputils.h>         // current_uid() 等 KP 工具函数
+#include <ksyms.h>
+#include <log.h>
+#include <asm/current.h>     // current 宏 (指向当前进程 task_struct)
+#include <linux/sched.h>     // task_struct 相关
+#include <asm/ptrace.h>      // struct pt_regs (ARM64 寄存器结构)
+#include <asm/processor.h>
+
+#define MAX_ERRNO 4095
+#define IS_ERR_VALUE(x) ((unsigned long)(void *)(x) >= (unsigned long)-MAX_ERRNO)
+#define IS_ERR(ptr) IS_ERR_VALUE(ptr)
+
+extern int (*kf_strcmp)(const char *cs, const char *ct);
+extern int (*kf_strncmp)(const char *cs, const char *ct, unsigned long count);
+extern unsigned long (*kf_strlen)(const char *s);
+
+#define strcmp kfunc_def(strcmp)
+#define strncmp kfunc_def(strncmp)
+#define strlen kfunc_def(strlen)
 
 KPM_NAME("svc_monitor");
 KPM_VERSION("8.1.0");
 KPM_LICENSE("GPL v2");
-KPM_AUTHOR("SVC Monitor Team");
+KPM_AUTHOR("Xiaowaaa");
 KPM_DESCRIPTION("Enhanced ARM64 SVC syscall monitor with deep arg parsing");
 
 /* ================================================================
  * Constants
  * ================================================================ */
-#define MAX_EVENTS      1024
-#define MAX_NR          320
-#define BITMAP_LONGS    (MAX_NR / 64 + 1)
-#define OUTPUT_PATH     "/data/local/tmp/svc_out.json"
-#define DESC_BUF_SIZE   1024
-#define PATH_BUF_SIZE   256
+#define MAX_EVENTS      1024      // 环形缓冲区容量，最多缓存 1024 条事件
+#define MAX_NR          512       // 支持的最大 syscall 号
+#define BITMAP_LONGS    (MAX_NR / 64 + 1) // bitmap 用 unsigned long 数组，每个 64 位
+#define OUTPUT_PATH     "/data/local/tmp/svc_out.json" // CTL0 的 JSON 输出写到这个文件
+#define EVENT_PATH      "/data/local/tmp/svc_events.jsonl"
+#define DESC_BUF_SIZE   1024      // 参数描述字符串缓冲区（v8.1 从小 buffer 扩大到 1024）
+#define PATH_BUF_SIZE   256       // 路径字符串缓冲区
 #define SMALL_BUF       128
-#define DATA_PREVIEW    64
+#define DATA_PREVIEW    64        // write/sendto 的数据预览最多看前 64 字节
 
 /* ================================================================
  * Syscall name table (ARM64, 0-291)
@@ -172,6 +188,8 @@ static const char *syscall_names[] = {
 
 static const char *get_syscall_name(int nr)
 {
+    if (nr == 435) return "clone3";
+    if (nr == -1) return "do_filp_open";
     if (nr >= 0 && nr < SYSCALL_NAME_MAX && syscall_names[nr])
         return syscall_names[nr];
     return "unknown";
@@ -180,16 +198,17 @@ static const char *get_syscall_name(int nr)
 /* ================================================================
  * Global state — lock-free, volatile for single-writer/multi-reader
  * ================================================================ */
-static volatile int g_enabled = 0;                  /* 0=paused, 1=active */
-static volatile int g_target_uid = -1;              /* -1=all, >=0=specific */
-static volatile unsigned long g_nr_bitmap[BITMAP_LONGS];
-static volatile unsigned int g_seq = 0;
-static volatile unsigned int g_total = 0;
+static volatile int g_enabled = 0;           // 监控开关，0=暂停，1=启用
+static volatile int g_target_uid = -1;       // UID 过滤，-1=全部，>=0=只监控指定 UID
+static volatile unsigned long g_nr_bitmap[BITMAP_LONGS]; // 位图：哪些 syscall NR 要记录
+static volatile unsigned int g_seq = 0;      // 事件序列号（全局自增）
+static volatile unsigned int g_total = 0;    // 总事件计数
 
 /* Hook tracking */
 #define HOOK_INLINE  1
 #define HOOK_FP      2
 
+//每个要 hook 的 syscall 有一个 hook_entry_t 记录它的状态和 hook 方式。
 typedef struct {
     int nr;
     int narg;
@@ -197,30 +216,58 @@ typedef struct {
     int method;  /* HOOK_INLINE or HOOK_FP */
 } hook_entry_t;
 
+
 /* Event record — expanded for detailed parsing */
+//这里参数的读取在内核态进行解析，但是调用地址返回地址在APK侧读取maps文件进行解析
 typedef struct {
-    unsigned int seq;
-    int nr;
-    int pid;
-    int uid;
-    char comm[16];
-    unsigned long a0, a1, a2, a3, a4, a5;
-    unsigned long pc;
-    unsigned long caller;
+    unsigned int seq;          // 事件序列号
+    int nr;                    // syscall 号
+    int pid;                   // 进程 PID
+    int uid;                   // UID
+    char comm[16];             // 进程名
+    unsigned long a0, a1, a2, a3, a4, a5;      // 6 个参数原始值
+    unsigned long pc;          // 调用者 PC 寄存器
+    unsigned long caller;      // LR 寄存器（返回地址）
     unsigned long clone_fn;
-    char desc[DESC_BUF_SIZE];
+    char desc[DESC_BUF_SIZE];  // 解析后的参数描述字符串（核心输出）
 } svc_event_t;
 
-static svc_event_t g_events[MAX_EVENTS];
-static volatile int g_ev_head = 0;
-static volatile int g_ev_count = 0;
+static svc_event_t g_events[MAX_EVENTS]; // 环形缓冲区
+static volatile int g_ev_head = 0;       // 写入位置
+static volatile int g_ev_tail = 0;       // 读取位置（写文件线程消费）
+static volatile int g_ev_count = 0;      // 当前缓冲区中的事件数
+static volatile unsigned int g_ev_dropped = 0;
+static volatile int g_ev_lock = 0;
 static volatile int g_hooks_installed = 0;
 static volatile int g_tier2_loaded = 0;
+
+static struct task_struct *g_writer_task = 0;
+static volatile int g_writer_stop = 0;
+
+extern unsigned long (*kallsyms_lookup_name)(const char *name);
+static long (*g_probe_kernel_read)(void *dst, const void *src, unsigned long size) = 0;
+
+static unsigned long g_do_filp_open_addr = 0;
+static int g_do_filp_open_active = 0;
+
+struct file;
+typedef long long loff_t;
+
+#define O_WRONLY  00000001
+#define O_CREAT   00000100
+#define O_TRUNC   00001000
+#define O_APPEND  00002000
+
+static struct file *(*g_filp_open)(const char *filename, int flags, unsigned short mode) = 0;
+static int (*g_filp_close)(struct file *filp, void *id) = 0;
+static long (*g_vfs_llseek)(struct file *file, long offset, int whence) = 0;
+static long (*g_kernel_write)(struct file *file, const void *buf, unsigned long count, loff_t *pos) = 0;
 
 /* ================================================================
  * Bitmap operations
  * ================================================================ */
-static inline void bitmap_set(volatile unsigned long *bm, int bit)
+//感觉这部分写的不是很好，最好是精准控制要hook哪些系统调用号，给他加进位图内
+ static inline void bitmap_set(volatile unsigned long *bm, int bit)
 {
     if (bit >= 0 && bit < MAX_NR)
         bm[bit / 64] |= (1UL << (bit % 64));
@@ -236,6 +283,26 @@ static inline int bitmap_test(volatile unsigned long *bm, int bit)
 {
     if (bit < 0 || bit >= MAX_NR) return 0;
     return (bm[bit / 64] >> (bit % 64)) & 1;
+}
+
+static inline void ev_lock(void)
+{
+    unsigned int tmp;
+    do {
+        asm volatile(
+            "1: ldaxr %w0, [%1]\n"
+            "cbnz  %w0, 1b\n"
+            "stxr  %w0, %w2, [%1]\n"
+            "cbnz  %w0, 1b\n"
+            : "=&r"(tmp)
+            : "r"(&g_ev_lock), "r"(1)
+            : "memory");
+    } while (0);
+}
+
+static inline void ev_unlock(void)
+{
+    asm volatile("stlr wzr, [%0]\n" :: "r"(&g_ev_lock) : "memory");
 }
 
 /* ================================================================
@@ -258,12 +325,10 @@ static void safe_copy_user_str(char *dst, unsigned long uptr, int maxlen)
 /* Read raw bytes from user-space, return bytes actually read (0 on fail) */
 static int safe_copy_user_bytes(char *dst, unsigned long uptr, int maxlen)
 {
-    if (!uptr || uptr < 0x1000UL || uptr > 0x7ffffffffff0UL)
-        return 0;
-    /* Use compat_strncpy_from_user but treat as raw bytes */
-    long ret = compat_strncpy_from_user(dst, (const char __user *)uptr, maxlen);
-    if (ret < 0) return 0;
-    return (int)(ret < maxlen ? ret : maxlen);
+    (void)dst;
+    (void)uptr;
+    (void)maxlen;
+    return 0;
 }
 
 /* Read a user-space pointer (unsigned long) from user address */
@@ -272,10 +337,23 @@ static unsigned long safe_read_user_ptr(unsigned long uptr)
     unsigned long val = 0;
     if (!uptr || uptr < 0x1000UL || uptr > 0x7ffffffffff0UL)
         return 0;
-    /* Read 8 bytes (pointer size on arm64) */
-    if (compat_strncpy_from_user((char *)&val, (const char __user *)uptr, 8) < 0)
-        return 0;
+    if (safe_copy_user_bytes((char *)&val, uptr, 8) != 8) return 0;
     return val;
+}
+
+static void safe_copy_kernel_str(char *dst, unsigned long kptr, int maxlen)
+{
+    int i;
+    if (!dst || maxlen <= 0) return;
+    dst[0] = '\0';
+    if (!g_probe_kernel_read || !kptr) return;
+    for (i = 0; i < maxlen - 1; i++) {
+        char c = 0;
+        if (g_probe_kernel_read(&c, (const void *)(kptr + (unsigned long)i), 1) != 0) break;
+        dst[i] = c;
+        if (c == '\0') return;
+    }
+    dst[maxlen - 1] = '\0';
 }
 
 /* ================================================================
@@ -289,20 +367,20 @@ static int decode_open_flags(char *buf, int blen, unsigned long flags)
     else if (acc == 1) n += snprintf(buf + n, blen - n, "O_WRONLY");
     else if (acc == 2) n += snprintf(buf + n, blen - n, "O_RDWR");
 
-    if (flags & 0x40)    n += snprintf(buf + n, blen - n, "|O_CREAT");
-    if (flags & 0x80)    n += snprintf(buf + n, blen - n, "|O_EXCL");
-    if (flags & 0x100)   n += snprintf(buf + n, blen - n, "|O_NOCTTY");
-    if (flags & 0x200)   n += snprintf(buf + n, blen - n, "|O_TRUNC");
-    if (flags & 0x400)   n += snprintf(buf + n, blen - n, "|O_APPEND");
-    if (flags & 0x800)   n += snprintf(buf + n, blen - n, "|O_NONBLOCK");
-    if (flags & 0x1000)  n += snprintf(buf + n, blen - n, "|O_DSYNC");
-    if (flags & 0x2000)  n += snprintf(buf + n, blen - n, "|O_ASYNC");
-    if (flags & 0x10000) n += snprintf(buf + n, blen - n, "|O_DIRECTORY");
-    if (flags & 0x20000) n += snprintf(buf + n, blen - n, "|O_NOFOLLOW");
-    if (flags & 0x40000) n += snprintf(buf + n, blen - n, "|O_CLOEXEC");
-    if (flags & 0x100000) n += snprintf(buf + n, blen - n, "|O_PATH");
-    if (flags & 0x200000) n += snprintf(buf + n, blen - n, "|O_TMPFILE");
-    if (flags & 0x400000) n += snprintf(buf + n, blen - n, "|O_LARGEFILE");
+    if (flags & 0x40)    n += snprintf(buf + n, blen - n, " |O_CREAT");
+    if (flags & 0x80)    n += snprintf(buf + n, blen - n, " |O_EXCL");
+    if (flags & 0x100)   n += snprintf(buf + n, blen - n, " |O_NOCTTY");
+    if (flags & 0x200)   n += snprintf(buf + n, blen - n, " |O_TRUNC");
+    if (flags & 0x400)   n += snprintf(buf + n, blen - n, " |O_APPEND");
+    if (flags & 0x800)   n += snprintf(buf + n, blen - n, " |O_NONBLOCK");
+    if (flags & 0x1000)  n += snprintf(buf + n, blen - n, " |O_DSYNC");
+    if (flags & 0x2000)  n += snprintf(buf + n, blen - n, " |O_ASYNC");
+    if (flags & 0x10000) n += snprintf(buf + n, blen - n, " |O_DIRECTORY");
+    if (flags & 0x20000) n += snprintf(buf + n, blen - n, " |O_NOFOLLOW");
+    if (flags & 0x40000) n += snprintf(buf + n, blen - n, " |O_CLOEXEC");
+    if (flags & 0x100000) n += snprintf(buf + n, blen - n, " |O_PATH");
+    if (flags & 0x200000) n += snprintf(buf + n, blen - n, " |O_TMPFILE");
+    if (flags & 0x400000) n += snprintf(buf + n, blen - n, " |O_LARGEFILE");
     return n;
 }
 
@@ -312,27 +390,27 @@ static int decode_open_flags(char *buf, int blen, unsigned long flags)
 static int decode_mmap_prot(char *buf, int blen, unsigned long prot)
 {
     int n = 0;
-    if (prot == 0) return snprintf(buf, blen, "PROT_NONE");
-    if (prot & 1) n += snprintf(buf + n, blen - n, "PROT_READ");
-    if (prot & 2) n += snprintf(buf + n, blen - n, "%sPROT_WRITE", n ? "|" : "");
-    if (prot & 4) n += snprintf(buf + n, blen - n, "%sPROT_EXEC", n ? "|" : "");
+    if (prot == 0) return snprintf(buf, blen, " PROT_NONE");
+    if (prot & 1) n += snprintf(buf + n, blen - n, " PROT_READ");
+    if (prot & 2) n += snprintf(buf + n, blen - n, " %sPROT_WRITE", n ? "|" : "");
+    if (prot & 4) n += snprintf(buf + n, blen - n, " %sPROT_EXEC", n ? "|" : "");
     return n;
 }
 
 static int decode_mmap_flags(char *buf, int blen, unsigned long flags)
 {
     int n = 0;
-    if (flags & 0x01) n += snprintf(buf + n, blen - n, "MAP_SHARED");
-    if (flags & 0x02) n += snprintf(buf + n, blen - n, "%sMAP_PRIVATE", n ? "|" : "");
-    if (flags & 0x10) n += snprintf(buf + n, blen - n, "%sMAP_FIXED", n ? "|" : "");
-    if (flags & 0x20) n += snprintf(buf + n, blen - n, "%sMAP_ANONYMOUS", n ? "|" : "");
-    if (flags & 0x40) n += snprintf(buf + n, blen - n, "%sMAP_GROWSDOWN", n ? "|" : "");
+    if (flags & 0x01) n += snprintf(buf + n, blen - n, " MAP_SHARED");
+    if (flags & 0x02) n += snprintf(buf + n, blen - n, " %sMAP_PRIVATE", n ? "|" : "");
+    if (flags & 0x10) n += snprintf(buf + n, blen - n, " %sMAP_FIXED", n ? "|" : "");
+    if (flags & 0x20) n += snprintf(buf + n, blen - n, " %sMAP_ANONYMOUS", n ? "|" : "");
+    if (flags & 0x40) n += snprintf(buf + n, blen - n, " %sMAP_GROWSDOWN", n ? "|" : "");
     if (flags & 0x100) n += snprintf(buf + n, blen - n, "%sMAP_DENYWRITE", n ? "|" : "");
-    if (flags & 0x800) n += snprintf(buf + n, blen - n, "%sMAP_EXECUTABLE", n ? "|" : "");
-    if (flags & 0x4000) n += snprintf(buf + n, blen - n, "%sMAP_POPULATE", n ? "|" : "");
-    if (flags & 0x8000) n += snprintf(buf + n, blen - n, "%sMAP_NONBLOCK", n ? "|" : "");
-    if (flags & 0x40000) n += snprintf(buf + n, blen - n, "%sMAP_STACK", n ? "|" : "");
-    if (flags & 0x80000) n += snprintf(buf + n, blen - n, "%sMAP_HUGETLB", n ? "|" : "");
+    if (flags & 0x800) n += snprintf(buf + n, blen - n, " %sMAP_EXECUTABLE", n ? "|" : "");
+    if (flags & 0x4000) n += snprintf(buf + n, blen - n, " %sMAP_POPULATE", n ? "|" : "");
+    if (flags & 0x8000) n += snprintf(buf + n, blen - n, " %sMAP_NONBLOCK", n ? "|" : "");
+    if (flags & 0x40000) n += snprintf(buf + n, blen - n, " %sMAP_STACK", n ? "|" : "");
+    if (flags & 0x80000) n += snprintf(buf + n, blen - n, " %sMAP_HUGETLB", n ? "|" : "");
     return n;
 }
 
@@ -464,7 +542,7 @@ static int data_preview(char *buf, int blen, unsigned long uptr, unsigned long d
 }
 
 /* ================================================================
- * prctl option name decoder
+ * prctl option name decoder，这个函数蛮重要的，可以查看app对自己进行了什么操作
  * ================================================================ */
 static const char *decode_prctl_option(int opt)
 {
@@ -489,7 +567,7 @@ static const char *decode_prctl_option(int opt)
 }
 
 /* ================================================================
- * ptrace request name decoder
+ * ptrace request name decoder ptrace模块挺有意思，可以配合这个函数做一些高级操作
  * ================================================================ */
 static const char *decode_ptrace_request(long req)
 {
@@ -591,7 +669,7 @@ static void describe_args(int nr, unsigned long a0, unsigned long a1,
     case 56: /* openat */
         safe_copy_user_str(pathbuf, a1, sizeof(pathbuf));
         decode_open_flags(flagbuf, sizeof(flagbuf), a2);
-        n = snprintf(desc, dlen, "dirfd=%d path=\"%s\" flags=%s(0x%lx) mode=0%lo",
+        n = snprintf(desc, dlen, "dirfd=%d   path=\"%s\"   flags=%s(0x%lx)   mode=0%lo",
                      (int)a0, pathbuf, flagbuf, a2, a3);
         break;
 
@@ -784,17 +862,23 @@ static void describe_args(int nr, unsigned long a0, unsigned long a1,
         break;
 
     case 220: /* clone */
+        //还应该解析其他的参数，比如哪个函数放进了线程中
         n = snprintf(desc, dlen, "flags=0x%lx", a0);
         if (a0 & 0x00000100) n += snprintf(desc + n, dlen - n, " CLONE_VM");
-        if (a0 & 0x00000200) n += snprintf(desc + n, dlen - n, "|CLONE_FS");
-        if (a0 & 0x00000400) n += snprintf(desc + n, dlen - n, "|CLONE_FILES");
-        if (a0 & 0x00000800) n += snprintf(desc + n, dlen - n, "|CLONE_SIGHAND");
-        if (a0 & 0x00010000) n += snprintf(desc + n, dlen - n, "|CLONE_THREAD");
-        if (a0 & 0x02000000) n += snprintf(desc + n, dlen - n, "|CLONE_NEWNS");
-        if (a0 & 0x04000000) n += snprintf(desc + n, dlen - n, "|CLONE_SYSVSEM");
-        if (a0 & 0x00200000) n += snprintf(desc + n, dlen - n, "|CLONE_NEWPID");
-        if (a0 & 0x40000000) n += snprintf(desc + n, dlen - n, "|CLONE_NEWNET");
+        if (a0 & 0x00000200) n += snprintf(desc + n, dlen - n, " CLONE_FS");
+        if (a0 & 0x00000400) n += snprintf(desc + n, dlen - n, " CLONE_FILES");
+        if (a0 & 0x00000800) n += snprintf(desc + n, dlen - n, " CLONE_SIGHAND");
+        if (a0 & 0x00010000) n += snprintf(desc + n, dlen - n, " CLONE_THREAD");
+        if (a0 & 0x02000000) n += snprintf(desc + n, dlen - n, " CLONE_NEWNS");
+        if (a0 & 0x04000000) n += snprintf(desc + n, dlen - n, " CLONE_SYSVSEMVPID");
+        if (a0 & 0x40000000) n += snprintf(desc + n, dlen - n, " |CLONE_NEWNET");
         n += snprintf(desc + n, dlen - n, " stack=0x%lx", a1);
+        break;
+
+    case 435: /* clone3 */
+        {
+            n = snprintf(desc, dlen, "uargs=0x%lx size=%lu", a0, a1);
+        }
         break;
 
     case 93: /* exit */
@@ -861,6 +945,10 @@ static void describe_args(int nr, unsigned long a0, unsigned long a1,
             n = snprintf(desc, dlen, "addr=0x%lx len=%lu advice=%s(%d)",
                          a0, a1, adv, (int)a2);
         }
+        break;
+
+    case 232: /* mincore */
+        n = snprintf(desc, dlen, "start=0x%lx len=%lu vec=0x%lx", a0, a1, a2);
         break;
 
     case 279: /* memfd_create */
@@ -1362,6 +1450,60 @@ static void describe_args(int nr, unsigned long a0, unsigned long a1,
     (void)n;
 }
 
+static void push_event(int nr, int uid,
+                       unsigned long a0, unsigned long a1, unsigned long a2,
+                       unsigned long a3, unsigned long a4, unsigned long a5,
+                       unsigned long pc, unsigned long caller, unsigned long clone_fn,
+                       const char *desc)
+{
+    int idx;
+
+    ev_lock();
+
+    idx = g_ev_head;
+    {
+        svc_event_t *ev = &g_events[idx];
+        ev->seq = ++g_seq;
+        ev->nr = nr;
+        ev->pid = *(int *)((char *)current + task_struct_offset.pid_offset);
+        ev->uid = uid;
+        ev->a0 = a0; ev->a1 = a1; ev->a2 = a2;
+        ev->a3 = a3; ev->a4 = a4; ev->a5 = a5;
+        ev->pc = pc;
+        ev->caller = caller;
+        ev->clone_fn = clone_fn;
+
+        {
+            int ci;
+            const char *p = get_task_comm(current);
+            for (ci = 0; ci < 15; ci++) {
+                ev->comm[ci] = p[ci];
+                if (!p[ci]) break;
+            }
+            ev->comm[ci < 15 ? ci : 15] = '\0';
+        }
+
+        {
+            int di;
+            if (!desc) desc = "";
+            for (di = 0; di < DESC_BUF_SIZE - 1 && desc[di]; di++)
+                ev->desc[di] = desc[di];
+            ev->desc[di] = '\0';
+        }
+    }
+
+    g_ev_head = (idx + 1) % MAX_EVENTS;
+    if (g_ev_count < MAX_EVENTS) {
+        g_ev_count++;
+    } else {
+        g_ev_tail = (g_ev_tail + 1) % MAX_EVENTS;
+        g_ev_dropped++;
+    }
+    g_total++;
+
+    ev_unlock();
+}
+
 /* ================================================================
  * Generic hook callback (before only)
  * One callback for ALL syscalls, NR passed via udata.
@@ -1395,6 +1537,7 @@ static void before_generic(hook_fargs4_t *args, void *udata)
     if (nr == __NR_clone && a1) {
         clone_fn = safe_read_user_ptr(a1);
         if (!clone_fn) clone_fn = safe_read_user_ptr(a1 + 8);
+        //这里接下来应该配合APK侧进行maps解析
     }
 
     if (has_syscall_wrapper) {
@@ -1402,50 +1545,114 @@ static void before_generic(hook_fargs4_t *args, void *udata)
         if (r) {
             pc = (unsigned long)r->pc;
             caller = (unsigned long)r->regs[30];
+            //这里同理，这里也应该继续进行apk侧的maps解析
         }
     }
 
     /* Build detailed description */
     describe_args(nr, a0, a1, a2, a3, a4, a5, desc, sizeof(desc));
 
-    /* Store event in ring buffer */
+    push_event(nr, uid, a0, a1, a2, a3, a4, a5, pc, caller, clone_fn, desc);
+}
+
+static void do_filp_open_before(hook_fargs3_t *args, void *udata)
+{
+    int uid;
+    unsigned long pc = 0;
+    unsigned long caller = 0;
+    char pathbuf[PATH_BUF_SIZE];
+    char flagbuf[256];
+    char desc[DESC_BUF_SIZE];
+
+    (void)udata;
+
+    if (!g_enabled) return;
+    uid = (int)current_uid();
+    if (g_target_uid >= 0 && uid != g_target_uid) return;
+    if (!bitmap_test(g_nr_bitmap, 56)) return;
+
     {
-        int idx = g_ev_head;
-        svc_event_t *ev = &g_events[idx];
-        ev->seq = ++g_seq;
-        ev->nr = nr;
-        ev->pid = *(int *)((char *)current + task_struct_offset.pid_offset);
-        /* Use a safer approach: get uid via official API */
-        ev->uid = uid;
-        ev->a0 = a0; ev->a1 = a1; ev->a2 = a2;
-        ev->a3 = a3; ev->a4 = a4; ev->a5 = a5;
-        ev->pc = pc;
-        ev->caller = caller;
-        ev->clone_fn = clone_fn;
-
-        /* Copy comm from task_struct */
-        {
-            int ci;
-            const char *p = get_task_comm(current);
-            for (ci = 0; ci < 15; ci++) {
-                ev->comm[ci] = p[ci];
-                if (!p[ci]) break;
-            }
-            ev->comm[ci < 15 ? ci : 15] = '\0';
+        struct pt_regs *r = _task_pt_reg(current);
+        if (r) {
+            pc = (unsigned long)r->pc;
+            caller = (unsigned long)r->regs[30];
         }
-
-        /* Copy description */
-        {
-            int di;
-            for (di = 0; di < DESC_BUF_SIZE - 1 && desc[di]; di++)
-                ev->desc[di] = desc[di];
-            ev->desc[di] = '\0';
-        }
-
-        g_ev_head = (idx + 1) % MAX_EVENTS;
-        if (g_ev_count < MAX_EVENTS) g_ev_count++;
-        g_total++;
     }
+
+    pathbuf[0] = '\0';
+    flagbuf[0] = '\0';
+
+    {
+        int dfd = (int)args->arg0;
+        unsigned long filename_ptr = (unsigned long)args->arg1;
+        unsigned long of_ptr = (unsigned long)args->arg2;
+        unsigned long name_ptr = 0;
+        struct open_flags_head {
+            int open_flag;
+            unsigned int mode;
+        } of;
+
+        if (g_probe_kernel_read && filename_ptr) {
+            if (g_probe_kernel_read(&name_ptr, (const void *)filename_ptr, sizeof(name_ptr)) == 0) {
+                safe_copy_kernel_str(pathbuf, name_ptr, sizeof(pathbuf));
+            }
+        }
+
+        if (g_probe_kernel_read && of_ptr) {
+            if (g_probe_kernel_read(&of, (const void *)of_ptr, sizeof(of)) == 0) {
+                decode_open_flags(flagbuf, sizeof(flagbuf), (unsigned long)of.open_flag);
+                snprintf(desc, sizeof(desc),
+                         "dfd=%d path=\"%s\" flags=%s(0x%x) mode=0%o",
+                         dfd, pathbuf[0] ? pathbuf : "?", flagbuf, of.open_flag, of.mode);
+            } else {
+                snprintf(desc, sizeof(desc),
+                         "dfd=%d filename=0x%lx open_flags=0x%lx",
+                         dfd, filename_ptr, of_ptr);
+            }
+        } else {
+            snprintf(desc, sizeof(desc),
+                     "dfd=%d filename=0x%lx open_flags=0x%lx",
+                     dfd, filename_ptr, of_ptr);
+        }
+    }
+
+    push_event(-1, uid,
+               (unsigned long)args->arg0, (unsigned long)args->arg1, (unsigned long)args->arg2,
+               0, 0, 0,
+               pc, caller, 0, desc);
+}
+
+static int install_do_filp_open(void)
+{
+    hook_err_t err;
+    unsigned long addr = 0;
+
+    if (g_do_filp_open_active) return 0;
+    if (!kallsyms_lookup_name) return -1;
+
+    if (!g_probe_kernel_read) {
+        g_probe_kernel_read = (long (*)(void *, const void *, unsigned long))
+            kallsyms_lookup_name("probe_kernel_read");
+    }
+
+    addr = kallsyms_lookup_name("do_filp_open.cfi_jt");
+    if (!addr) addr = kallsyms_lookup_name("do_filp_open");
+    if (!addr) return -1;
+
+    err = hook_wrap((void *)addr, 3, (void *)do_filp_open_before, (void *)0, (void *)0);
+    if (err != HOOK_NO_ERR) return -1;
+
+    g_do_filp_open_addr = addr;
+    g_do_filp_open_active = 1;
+    return 0;
+}
+
+static void remove_do_filp_open(void)
+{
+    if (!g_do_filp_open_active) return;
+    hook_unwrap((void *)g_do_filp_open_addr, (void *)do_filp_open_before, (void *)0);
+    g_do_filp_open_active = 0;
+    g_do_filp_open_addr = 0;
 }
 
 /* ================================================================
@@ -1464,12 +1671,14 @@ static hook_entry_t tier1_hooks[] = {
     { 64, 3, 0, 0 },   /* write */
     { 221, 3, 0, 0 },  /* execve */
     { 220, 5, 0, 0 },  /* clone */
+    { 435, 2, 0, 0 },  /* clone3 */
     { 93, 1, 0, 0 },   /* exit */
     { 94, 1, 0, 0 },   /* exit_group */
     { 222, 6, 0, 0 },  /* mmap */
     { 226, 3, 0, 0 },  /* mprotect */
     { 215, 2, 0, 0 },  /* munmap */
     { 214, 1, 0, 0 },  /* brk */
+    { 232, 3, 0, 0 },  /* mincore */
     { 198, 3, 0, 0 },  /* socket */
     { 200, 3, 0, 0 },  /* bind */
     { 203, 3, 0, 0 },  /* connect */
@@ -1615,11 +1824,11 @@ static void remove_tier2(void)
  * Preset configurations
  * ================================================================ */
 static const int preset_re_basic[] = {56,48,78,221,222,226,198,203,117,167,29,134,279,280};
-static const int preset_re_full[] = {56,48,35,78,79,63,64,221,281,220,93,94,222,226,215,198,200,203,206,207,117,167,29,25,129,131,134,135,277,280,279,146,144,147,105,273,97,268,261,291};
+static const int preset_re_full[] = {56,48,35,78,79,63,64,221,281,220,435,93,94,222,226,215,232,198,200,203,206,207,117,167,29,25,129,131,134,135,277,280,279,146,144,147,105,273,97,268,261,291};
 static const int preset_file[] = {56,57,48,35,78,79,80,61,63,64,62,34,38,276,53,54,291,43,27,5,8};
 static const int preset_net[] = {198,200,201,202,203,206,207,208,209,210,211,212,242};
-static const int preset_proc[] = {221,281,220,93,94,95,260,117,129,130,131,270,271};
-static const int preset_mem[] = {222,226,215,214,233,279,270,271};
+static const int preset_proc[] = {221,281,220,435,93,94,95,260,117,129,130,131,270,271};
+static const int preset_mem[] = {222,226,215,214,232,233,279,270,271};
 static const int preset_security[] = {117,277,280,146,144,147,149,105,273,106,97,268,91,167,134};
 
 static void apply_preset(const char *name)
@@ -1735,6 +1944,178 @@ dst[i++] = '\\'; if (i >= dstlen - 1) break;
     return i;
 }
 
+static int pop_event(svc_event_t *out)
+{
+    int ok = 0;
+    if (!out) return 0;
+    ev_lock();
+    if (g_ev_count > 0) {
+        svc_event_t *src = &g_events[g_ev_tail];
+        int i;
+        out->seq = src->seq;
+        out->nr = src->nr;
+        out->pid = src->pid;
+        out->uid = src->uid;
+        out->a0 = src->a0; out->a1 = src->a1; out->a2 = src->a2;
+        out->a3 = src->a3; out->a4 = src->a4; out->a5 = src->a5;
+        out->pc = src->pc;
+        out->caller = src->caller;
+        out->clone_fn = src->clone_fn;
+        for (i = 0; i < 16; i++) out->comm[i] = src->comm[i];
+        for (i = 0; i < DESC_BUF_SIZE; i++) out->desc[i] = src->desc[i];
+        g_ev_tail = (g_ev_tail + 1) % MAX_EVENTS;
+        g_ev_count--;
+        ok = 1;
+    }
+    ev_unlock();
+    return ok;
+}
+
+static int format_event_jsonl(char *buf, int blen, const svc_event_t *ev)
+{
+    char esc_desc[DESC_BUF_SIZE + 256];
+    if (!buf || blen <= 0 || !ev) return 0;
+    json_escape(esc_desc, sizeof(esc_desc), ev->desc);
+    return snprintf(
+        buf, blen,
+        "{\"seq\":%u,\"nr\":%d,\"name\":\"%s\",\"pid\":%d,\"uid\":%d,"
+        "\"comm\":\"%s\",\"pc\":%lu,\"caller\":%lu,\"clone_fn\":%lu,"
+        "\"a0\":%lu,\"a1\":%lu,\"a2\":%lu,\"a3\":%lu,\"a4\":%lu,\"a5\":%lu,"
+        "\"desc\":\"%s\"}\n",
+        ev->seq, ev->nr, get_syscall_name(ev->nr),
+        ev->pid, ev->uid, ev->comm,
+        ev->pc, ev->caller, ev->clone_fn,
+        ev->a0, ev->a1, ev->a2, ev->a3, ev->a4, ev->a5,
+        esc_desc
+    );
+}
+
+static struct file *open_event_file_fp(int truncate)
+{
+    int flags = O_WRONLY | O_CREAT;
+    if (truncate) flags |= O_TRUNC;
+    else flags |= O_APPEND;
+    if (!g_filp_open) return (struct file *)-1;
+    return g_filp_open(EVENT_PATH, flags, 0666);
+}
+
+typedef struct task_struct *(*kthread_run_t)(int (*threadfn)(void *data), void *data, const char namefmt[], ...);
+typedef int (*kthread_stop_t)(struct task_struct *k);
+typedef int (*kthread_should_stop_t)(void);
+typedef void (*msleep_t)(unsigned int msecs);
+
+static kthread_run_t g_kthread_run = 0;
+static kthread_stop_t g_kthread_stop = 0;
+static kthread_should_stop_t g_kthread_should_stop = 0;
+static msleep_t g_msleep = 0;
+
+static int event_writer_thread(void *data)
+{
+    struct file *fp = 0;
+    char line[2048];
+    (void)data;
+
+    while (!g_writer_stop && (!g_kthread_should_stop || !g_kthread_should_stop())) {
+        int wrote = 0;
+        int i;
+
+        if (!g_enabled) {
+            if (fp && !IS_ERR(fp) && g_filp_close) g_filp_close(fp, 0);
+            fp = 0;
+            if (g_msleep) g_msleep(200);
+            continue;
+        }
+
+        if (!g_filp_open || !g_filp_close || !g_kernel_write) {
+            if (g_msleep) g_msleep(500);
+            continue;
+        }
+
+        if (!fp) {
+            fp = open_event_file_fp(0);
+            if (IS_ERR(fp)) {
+                fp = 0;
+                if (g_msleep) g_msleep(500);
+                continue;
+            }
+        }
+
+        {
+            loff_t pos = 0;
+            if (g_vfs_llseek) {
+                long p = g_vfs_llseek(fp, 0, 2);
+                if (p > 0) pos = (loff_t)p;
+            }
+            if (pos < 0) pos = 0;
+            for (i = 0; i < 256; i++) {
+                svc_event_t ev;
+                int len;
+                if (!pop_event(&ev)) break;
+                len = format_event_jsonl(line, sizeof(line), &ev);
+                if (len > 0) {
+                    long rc = g_kernel_write(fp, line, (unsigned long)len, &pos);
+                    if (rc <= 0) {
+                        g_filp_close(fp, 0);
+                        fp = 0;
+                        break;
+                    }
+                    wrote++;
+                }
+            }
+        }
+
+        if (wrote == 0) {
+            if (g_msleep) g_msleep(20);
+        } else if (wrote < 256) {
+            if (g_msleep) g_msleep(5);
+        }
+    }
+
+    if (fp && !IS_ERR(fp) && g_filp_close) g_filp_close(fp, 0);
+    return 0;
+}
+
+static void start_writer_thread(void)
+{
+    if (g_writer_task) return;
+    if (!kallsyms_lookup_name) return;
+
+    if (!g_kthread_run)
+        g_kthread_run = (kthread_run_t)kallsyms_lookup_name("kthread_run");
+    if (!g_kthread_stop)
+        g_kthread_stop = (kthread_stop_t)kallsyms_lookup_name("kthread_stop");
+    if (!g_kthread_should_stop)
+        g_kthread_should_stop = (kthread_should_stop_t)kallsyms_lookup_name("kthread_should_stop");
+    if (!g_msleep)
+        g_msleep = (msleep_t)kallsyms_lookup_name("msleep");
+
+    if (!g_filp_open)
+        g_filp_open = (typeof(g_filp_open))kallsyms_lookup_name("filp_open");
+    if (!g_filp_close)
+        g_filp_close = (typeof(g_filp_close))kallsyms_lookup_name("filp_close");
+    if (!g_vfs_llseek)
+        g_vfs_llseek = (typeof(g_vfs_llseek))kallsyms_lookup_name("vfs_llseek");
+    if (!g_kernel_write) {
+        g_kernel_write = (typeof(g_kernel_write))kallsyms_lookup_name("kernel_write");
+        if (!g_kernel_write)
+            g_kernel_write = (typeof(g_kernel_write))kallsyms_lookup_name("__kernel_write");
+    }
+
+    g_writer_stop = 0;
+    if (g_kthread_run) {
+        g_writer_task = g_kthread_run(event_writer_thread, (void *)0, "svcmon_writer");
+    }
+}
+
+static void stop_writer_thread(void)
+{
+    g_writer_stop = 1;
+    if (g_writer_task && g_kthread_stop) {
+        g_kthread_stop(g_writer_task);
+    }
+    g_writer_task = 0;
+}
+
 /* ================================================================
  * CTL0 command handler
  * ================================================================ */
@@ -1755,12 +2136,13 @@ static long svc_ctl0(const char *args, char *__user out_msg, int outlen)
             "{\"ok\":true,\"version\":\"8.1.0\",\"enabled\":%s,"
             "\"target_uid\":%d,\"hooks_installed\":%d,"
             "\"nrs_logging\":%d,\"events_total\":%d,"
-            "\"events_buffered\":%d,\"tier2\":%s,"
+            "\"events_buffered\":%d,\"events_dropped\":%u,\"tier2\":%s,"
             "\"logging_nrs\":[",
             g_enabled ? "true" : "false",
             g_target_uid, g_hooks_installed,
             nr_logging, g_total,
             g_ev_count < MAX_EVENTS ? g_ev_count : MAX_EVENTS,
+            g_ev_dropped,
             g_tier2_loaded ? "true" : "false");
 
         int first = 1;
@@ -1791,6 +2173,11 @@ static long svc_ctl0(const char *args, char *__user out_msg, int outlen)
                     tier2_hooks[i].method == HOOK_INLINE ? "inline" : "fp");
                 first = 0;
             }
+        }
+        if (g_do_filp_open_active) {
+            if (!first) n += snprintf(buf + n, blen - n, ",");
+            n += snprintf(buf + n, blen - n, "{\"nr\":-1,\"name\":\"do_filp_open\",\"method\":\"inline\"}");
+            first = 0;
         }
         n += snprintf(buf + n, blen - n, "]}");
     }
@@ -1893,6 +2280,16 @@ static long svc_ctl0(const char *args, char *__user out_msg, int outlen)
         n = snprintf(buf, blen, "{\"ok\":true,\"tier2\":false}");
     }
 
+    /* ---- do_filp_open on/off ---- */
+    else if (!strcmp(args, "do_filp_open on") || !strcmp(args, "filp_open on")) {
+        if (!g_do_filp_open_active) install_do_filp_open();
+        n = snprintf(buf, blen, "{\"ok\":true,\"do_filp_open\":%s}", g_do_filp_open_active ? "true" : "false");
+    }
+    else if (!strcmp(args, "do_filp_open off") || !strcmp(args, "filp_open off")) {
+        remove_do_filp_open();
+        n = snprintf(buf, blen, "{\"ok\":true,\"do_filp_open\":false}");
+    }
+
     /* ---- drain <max> ---- */
     else if (!strncmp(args, "drain ", 6) || !strcmp(args, "drain")) {
         int max = 50;
@@ -1931,8 +2328,12 @@ static long svc_ctl0(const char *args, char *__user out_msg, int outlen)
         }
         n += snprintf(buf + n, blen - n, "]}");
 
+        ev_lock();
         g_ev_head = 0;
+        g_ev_tail = 0;
         g_ev_count = 0;
+        g_ev_dropped = 0;
+        ev_unlock();
     }
 
     /* ---- events ---- */
@@ -1942,8 +2343,12 @@ static long svc_ctl0(const char *args, char *__user out_msg, int outlen)
 
     /* ---- clear ---- */
     else if (!strcmp(args, "clear")) {
+        ev_lock();
         g_ev_head = 0;
+        g_ev_tail = 0;
         g_ev_count = 0;
+        g_ev_dropped = 0;
+        ev_unlock();
         n = snprintf(buf, blen, "{\"ok\":true,\"cleared\":true}");
     }
 
@@ -1979,14 +2384,28 @@ static long svc_init(const char *args, const char *event, void *__user reserved)
     g_enabled = 0;
     g_target_uid = -1;
     g_ev_head = 0;
+    g_ev_tail = 0;
     g_ev_count = 0;
+    g_ev_dropped = 0;
     g_seq = 0;
     g_total = 0;
     g_hooks_installed = 0;
     g_tier2_loaded = 0;
 
+    {
+        struct file *fp = open_event_file_fp(1);
+        if (fp && !IS_ERR(fp) && g_filp_close) g_filp_close(fp, 0);
+    }
+    start_writer_thread();
+
     ok = install_tier1();
     printk("svc_monitor: tier1 installed %d/%d hooks\n", ok, (int)TIER1_COUNT);
+
+    if (install_do_filp_open() == 0) {
+        printk("svc_monitor: do_filp_open hook installed\n");
+    } else {
+        printk("svc_monitor: do_filp_open hook install failed\n");
+    }
 
     apply_preset("re_basic");
     printk("svc_monitor: ready, g_enabled=0 (waiting for APP)\n");
@@ -1998,6 +2417,10 @@ static long svc_exit(void *__user reserved)
     int i;
     printk("svc_monitor: exit, removing hooks...\n");
     g_enabled = 0;
+
+    stop_writer_thread();
+
+    remove_do_filp_open();
 
     if (g_tier2_loaded) {
         for (i = 0; i < (int)TIER2_COUNT; i++)

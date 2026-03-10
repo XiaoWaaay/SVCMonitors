@@ -4,7 +4,7 @@
             "outputFile": "com.svcmonitor.app-mergeDebugResources-24:/values-v24/values-v24.xml",
             "map": [
                 {
-                    "source": "/Users/bytedance/.gradle/caches/transforms-3/2979c79566baf49db84ba2def4f38b0c/transformed/appcompat-1.6.1/res/values-v24/values-v24.xml",
+                    "source": "/Users/bytedance/.gradle/caches/transforms-3/cd848766efe9399acf47483dd5ee5b45/transformed/appcompat-1.6.1/res/values-v24/values-v24.xml",
                     "from": {
                         "startLines": "2,3",
                         "startColumns": "4,4",
