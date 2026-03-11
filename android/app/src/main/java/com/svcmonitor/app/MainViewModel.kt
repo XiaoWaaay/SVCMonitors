@@ -1,6 +1,7 @@
 package com.svcmonitor.app
 
 import android.util.Log
+import android.content.Context
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
@@ -9,6 +10,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.svcmonitor.app.db.SvcEventDb
+import com.svcmonitor.app.db.SvcEventDao
+import com.svcmonitor.app.db.toEntity
+import com.svcmonitor.app.db.toSvcEvent
 
 /**
  * MainViewModel v8.0.1 — Filter control + monitoring on/off + status polling.
@@ -36,8 +43,10 @@ class MainViewModel : ViewModel() {
     // ===== Events =====
     private val _events = MutableLiveData<List<StatusParser.SvcEvent>>(emptyList())
     val events: LiveData<List<StatusParser.SvcEvent>> = _events
+    private val _newEvents = MutableLiveData<List<StatusParser.SvcEvent>>(emptyList())
+    val newEvents: LiveData<List<StatusParser.SvcEvent>> = _newEvents
     private val eventBuffer = mutableListOf<StatusParser.SvcEvent>()
-    private val maxEvents = 3000
+    private val maxEvents = 120
     var doFilpOpenEnabled: Boolean = true
 
     private val _eventCount = MutableLiveData(0)
@@ -61,6 +70,32 @@ class MainViewModel : ViewModel() {
     private val nrSet = mutableSetOf<Int>()
     private var statusTick = 0
 
+    private var dao: SvcEventDao? = null
+    private var fileOffset: Long = 0L
+    private var tailBuf: ByteArray = ByteArray(0)
+    private var searchQuery: String = ""
+    private var tidFilter: Int? = null
+    private var useJsonFallback = false
+    private var emptyBinPolls = 0
+
+    fun initDb(ctx: Context) {
+        dao = SvcEventDb.get(ctx).dao()
+    }
+
+    fun setSearchQuery(q: String) {
+        searchQuery = q.trim()
+        viewModelScope.launch {
+            refreshUiFromDb()
+        }
+    }
+
+    fun setTidFilter(tid: Int?) {
+        tidFilter = tid?.takeIf { it > 0 }
+        viewModelScope.launch {
+            refreshUiFromDb()
+        }
+    }
+
     fun startPolling() {
         if (pollingJob?.isActive == true) return
         pollingJob = viewModelScope.launch {
@@ -68,7 +103,7 @@ class MainViewModel : ViewModel() {
                 if (!pollingPaused) {
                     pollOnce()
                 }
-                delay(3000)
+                delay(if (_monitoring.value == true) 500 else 3000)
             }
         }
     }
@@ -81,17 +116,40 @@ class MainViewModel : ViewModel() {
     private suspend fun pollOnce() {
         try {
             if (_monitoring.value == true) {
-                val evResult = KpmBridge.drain(1024)
-                if (evResult.success && evResult.output.isNotEmpty()) {
-                    val drain = StatusParser.parseDrain(evResult.output)
-                    if (drain.ok && drain.events.isNotEmpty()) {
-                        synchronized(eventBuffer) {
-                            eventBuffer.addAll(drain.events)
-                            while (eventBuffer.size > maxEvents) {
-                                eventBuffer.removeAt(0)
-                            }
-                            _events.postValue(ArrayList(eventBuffer))
-                            _eventCount.postValue(eventBuffer.size)
+                if (!useJsonFallback) {
+                    val chunk = KpmBridge.readEventFileChunk(fileOffset, 256 * 1024)
+                    if (chunk.isNotEmpty()) {
+                        fileOffset += chunk.size.toLong()
+                        val merged = ByteArray(tailBuf.size + chunk.size)
+                        System.arraycopy(tailBuf, 0, merged, 0, tailBuf.size)
+                        System.arraycopy(chunk, 0, merged, tailBuf.size, chunk.size)
+                        val parsed = BinEventParser.parse(merged)
+                        if (parsed.consumedBytes > 0 && parsed.consumedBytes < merged.size) {
+                            tailBuf = merged.copyOfRange(parsed.consumedBytes, merged.size)
+                        } else if (parsed.consumedBytes >= merged.size) {
+                            tailBuf = ByteArray(0)
+                        }
+                        if (parsed.events.isNotEmpty()) {
+                            emptyBinPolls = 0
+                            storeAndPublish(parsed.events)
+                        } else {
+                            emptyBinPolls++
+                        }
+                    } else {
+                        emptyBinPolls++
+                    }
+
+                    if (emptyBinPolls >= 8) {
+                        useJsonFallback = true
+                    }
+                }
+
+                if (useJsonFallback) {
+                    val evResult = KpmBridge.drain(1024)
+                    if (evResult.success && evResult.output.isNotEmpty()) {
+                        val drain = StatusParser.parseDrain(evResult.output)
+                        if (drain.ok && drain.events.isNotEmpty()) {
+                            storeAndPublish(drain.events)
                         }
                     }
                 }
@@ -116,6 +174,55 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    private suspend fun storeAndPublish(events: List<StatusParser.SvcEvent>) {
+        if (events.isEmpty()) return
+        val nowNs = System.currentTimeMillis() * 1_000_000L
+        val daoLocal = dao
+        if (daoLocal != null) {
+            withContext(Dispatchers.IO) {
+                val entities = events.map { it.toEntity("", nowNs) }
+                daoLocal.upsertAll(entities)
+            }
+            _newEvents.postValue(events)
+            refreshUiFromDb()
+        } else {
+            synchronized(eventBuffer) {
+                eventBuffer.addAll(events)
+                while (eventBuffer.size > maxEvents) eventBuffer.removeAt(0)
+                _events.postValue(ArrayList(eventBuffer))
+                _newEvents.postValue(events)
+                _eventCount.postValue(eventBuffer.size)
+            }
+        }
+    }
+
+    private suspend fun refreshUiFromDb() {
+        val daoLocal = dao ?: run {
+            synchronized(eventBuffer) {
+                _events.postValue(ArrayList(eventBuffer))
+                _eventCount.postValue(eventBuffer.size)
+            }
+            return
+        }
+        val q = searchQuery
+        val tid = tidFilter
+        val list = withContext(Dispatchers.IO) {
+            if (tid != null) {
+                if (q.isBlank()) daoLocal.byTid(tid, 500) else daoLocal.searchAllByTid(q, tid, 500)
+            } else {
+                if (q.isBlank()) daoLocal.latest(maxEvents) else daoLocal.searchAll(q, 500)
+            }
+        }
+        val events = list.map { it.toSvcEvent() }
+        synchronized(eventBuffer) {
+            eventBuffer.clear()
+            eventBuffer.addAll(events)
+            _events.postValue(ArrayList(eventBuffer))
+        }
+        val cnt = withContext(Dispatchers.IO) { daoLocal.countAll() }
+        _eventCount.postValue(cnt)
+    }
+
     // ===== One-click monitoring =====
 
     /**
@@ -132,6 +239,12 @@ class MainViewModel : ViewModel() {
                     _events.postValue(emptyList())
                     _eventCount.postValue(0)
                 }
+                fileOffset = 0L
+                tailBuf = ByteArray(0)
+                useJsonFallback = false
+                emptyBinPolls = 0
+                dao?.let { withContext(Dispatchers.IO) { it.clearAll() } }
+                KpmBridge.clearEventFile()
 
                 // Step 1: Set target UID
                 Log.i(TAG, "startMonitoring: uid=$uid")
@@ -175,6 +288,12 @@ class MainViewModel : ViewModel() {
                     _events.postValue(emptyList())
                     _eventCount.postValue(0)
                 }
+                fileOffset = 0L
+                tailBuf = ByteArray(0)
+                useJsonFallback = false
+                emptyBinPolls = 0
+                dao?.let { withContext(Dispatchers.IO) { it.clearAll() } }
+                KpmBridge.clearEventFile()
 
                 Log.i(TAG, "startMonitoringWithNrs: uid=$uid nrs=${nrs.size}")
                 val r1 = KpmBridge.setUid(uid)
@@ -328,6 +447,12 @@ class MainViewModel : ViewModel() {
             pollingPaused = true
             try {
                 KpmBridge.clear()
+                fileOffset = 0L
+                tailBuf = ByteArray(0)
+                useJsonFallback = false
+                emptyBinPolls = 0
+                KpmBridge.clearEventFile()
+                dao?.let { withContext(Dispatchers.IO) { it.clearAll() } }
                 synchronized(eventBuffer) {
                     eventBuffer.clear()
                     _events.postValue(emptyList())

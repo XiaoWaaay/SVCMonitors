@@ -22,10 +22,20 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewModelScope
+import com.svcmonitor.app.db.SvcEventDb
+import com.svcmonitor.app.db.SvcEventEntity
+import com.svcmonitor.app.db.ThreadEdge
+import com.svcmonitor.app.db.ThreadStat
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
+import java.io.BufferedOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.ArrayDeque
 
 /**
  * MainActivity — 4-tab UI built programmatically (no XML layouts).
@@ -83,6 +93,21 @@ class MainActivity : AppCompatActivity() {
     private var resolvingSearch = false
     private var resolvingChain = false
 
+    private var relayEnabled = false
+    private var relayHost = "127.0.0.1"
+    private var relayPort = 5001
+    private var relayLastEnqueuedSeq = 0L
+    private val relayQueue = ArrayDeque<StatusParser.SvcEvent>(2048)
+    private var relayJob: kotlinx.coroutines.Job? = null
+    private var relayLastError: String = ""
+
+    private var pcServerEnabled = false
+    private var pcServerPort = 8080
+    private var pcServerJob: kotlinx.coroutines.Job? = null
+    private var pcServerSocket: java.net.ServerSocket? = null
+    private val pcServerClients = ArrayList<java.io.BufferedWriter>(4)
+    private var pcServerBacklogLimit = 5000
+
     private data class SensitiveRule(val needle: String, val color: Int)
     private val sensitiveRules by lazy {
         listOf(
@@ -120,6 +145,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         vm = ViewModelProvider(this)[MainViewModel::class.java]
+        vm.initDb(applicationContext)
         logExporter = LogExporter(this)
 
         hideSystemApps = prefs.getBoolean("hide_system_apps", false)
@@ -128,14 +154,21 @@ class MainActivity : AppCompatActivity() {
         historyLastSeq = prefs.getLong("history_last_seq", 0L)
         appList = loadVisibleApps(appSearchQuery)
 
+        relayEnabled = prefs.getBoolean("pc_relay_enabled", false)
+        relayHost = prefs.getString("pc_relay_host", "127.0.0.1") ?: "127.0.0.1"
+        relayPort = prefs.getInt("pc_relay_port", 5001)
+        pcServerEnabled = prefs.getBoolean("pc_server_enabled", false)
+        pcServerPort = prefs.getInt("pc_server_port", 8080)
+
         // Pre-build ALL tab views FIRST (before observeViewModel!)
         val dashboardView = buildDashboardTab()
         val filterView = buildFilterTab()
         val eventsView = buildEventsTab()
+        val threadView = buildThreadTab()
         val settingsView = buildSettingsTab()
 
         // Build main layout with TabHost
-        val root = buildMainLayout(dashboardView, filterView, eventsView, settingsView)
+        val root = buildMainLayout(dashboardView, filterView, eventsView, threadView, settingsView)
         setContentView(root)
 
         // NOW observe — all lateinit properties are initialized
@@ -143,6 +176,9 @@ class MainActivity : AppCompatActivity() {
 
         // Start polling
         vm.startPolling()
+
+        if (relayEnabled) startRelay()
+        if (pcServerEnabled) startPcServer()
     }
 
     /* ══════════════════════════════════════════════════════════════
@@ -150,7 +186,7 @@ class MainActivity : AppCompatActivity() {
      * ══════════════════════════════════════════════════════════════ */
 
     private fun buildMainLayout(
-        dashboard: View, filter: View, events: View, settings: View
+        dashboard: View, filter: View, events: View, thread: View, settings: View
     ): View {
         val tabHost = TabHost(this, null).apply {
             id = android.R.id.tabhost
@@ -207,6 +243,7 @@ class MainActivity : AppCompatActivity() {
         tabHost.addTab(tabHost.newTabSpec("dashboard").setIndicator("监控").setContent { dashboard })
         tabHost.addTab(tabHost.newTabSpec("filter").setIndicator("过滤").setContent { filter })
         tabHost.addTab(tabHost.newTabSpec("events").setIndicator("事件").setContent { events })
+        tabHost.addTab(tabHost.newTabSpec("thread").setIndicator("线程").setContent { thread })
         tabHost.addTab(tabHost.newTabSpec("settings").setIndicator("设置").setContent { settings })
 
         return tabHost
@@ -414,6 +451,145 @@ class MainActivity : AppCompatActivity() {
             addRuleBtn("内存操作/注入", RuleSets.MEMORY)
         })
 
+        col.addView(makeCard {
+            addView(makeLabel("PC 联动转发"))
+
+            val hostRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val etHost = EditText(this@MainActivity).apply {
+                hint = "PC IP/域名 (如 192.168.1.10)"
+                setText(relayHost)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val etPort = EditText(this@MainActivity).apply {
+                hint = "端口"
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                setText(relayPort.toString())
+                layoutParams = LinearLayout.LayoutParams(dp(96), ViewGroup.LayoutParams.WRAP_CONTENT)
+            }
+            hostRow.addView(etHost)
+            hostRow.addView(Space(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(dp(8), 1) })
+            hostRow.addView(etPort)
+            addView(hostRow)
+
+            val tvState = makeValue(if (relayEnabled) "状态: 已开启" else "状态: 未开启").apply {
+                setTextColor(if (relayEnabled) cGreen else cSecondary)
+            }
+            addView(tvState)
+
+            val serverRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(8) }
+            }
+            val etServerPort = EditText(this@MainActivity).apply {
+                hint = "App 端口(默认8080)"
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                setText(pcServerPort.toString())
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            serverRow.addView(etServerPort)
+            serverRow.addView(Space(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(dp(8), 1) })
+            val tvServerState = makeValue(if (pcServerEnabled) "ADB模式: 已开启" else "ADB模式: 未开启").apply {
+                setTextColor(if (pcServerEnabled) cGreen else cSecondary)
+            }
+            serverRow.addView(tvServerState)
+            addView(serverRow)
+
+            addView(Switch(this@MainActivity).apply {
+                text = "开启 App 服务端 (PC 用 adb forward 连接)"
+                isChecked = pcServerEnabled
+                setOnCheckedChangeListener { _, checked ->
+                    pcServerPort = etServerPort.text.toString().toIntOrNull() ?: 8080
+                    prefs.edit()
+                        .putBoolean("pc_server_enabled", checked)
+                        .putInt("pc_server_port", pcServerPort)
+                        .apply()
+                    pcServerEnabled = checked
+                    if (checked) {
+                        tvServerState.text = "ADB模式: 已开启"
+                        tvServerState.setTextColor(cGreen)
+                        startPcServer()
+                    } else {
+                        tvServerState.text = "ADB模式: 未开启"
+                        tvServerState.setTextColor(cSecondary)
+                        stopPcServer()
+                    }
+                }
+            })
+
+            addView(Button(this@MainActivity).apply {
+                text = "显示 ADB 命令"
+                isAllCaps = false
+                setOnClickListener {
+                    pcServerPort = etServerPort.text.toString().toIntOrNull() ?: 8080
+                    prefs.edit().putInt("pc_server_port", pcServerPort).apply()
+                    tvMsg.text = "提示: PC 执行 adb forward tcp:$pcServerPort tcp:$pcServerPort，然后 PC Viewer 作为客户端连接 127.0.0.1:$pcServerPort"
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(6) }
+            })
+
+            val sw = Switch(this@MainActivity).apply {
+                text = "开启 PC 联动 (HTTP 推送到 /api/ingest)"
+                isChecked = relayEnabled
+                setOnCheckedChangeListener { _, checked ->
+                    relayHost = etHost.text.toString().trim().ifBlank { "127.0.0.1" }
+                    relayPort = etPort.text.toString().toIntOrNull() ?: 5001
+                    prefs.edit()
+                        .putBoolean("pc_relay_enabled", checked)
+                        .putString("pc_relay_host", relayHost)
+                        .putInt("pc_relay_port", relayPort)
+                        .apply()
+                    relayEnabled = checked
+                    if (checked) {
+                        tvState.text = "状态: 已开启"
+                        tvState.setTextColor(cGreen)
+                        startRelay()
+                    } else {
+                        tvState.text = "状态: 未开启"
+                        tvState.setTextColor(cSecondary)
+                        stopRelay()
+                    }
+                }
+            }
+            addView(sw)
+
+            addView(Button(this@MainActivity).apply {
+                text = "测试连接"
+                isAllCaps = false
+                setOnClickListener {
+                    relayHost = etHost.text.toString().trim().ifBlank { "127.0.0.1" }
+                    relayPort = etPort.text.toString().toIntOrNull() ?: 5001
+                    prefs.edit().putString("pc_relay_host", relayHost).putInt("pc_relay_port", relayPort).apply()
+                    lifecycleScope.launch {
+                        val ok = withContext(Dispatchers.IO) { testRelayOnce() }
+                        if (ok) {
+                            tvMsg.text = "提示: PC 联动接口可用"
+                        } else {
+                            val h = relayHost.trim().lowercase()
+                            tvMsg.text = if (h == "127.0.0.1" || h == "localhost") {
+                                "提示: PC 联动接口不可用（${relayLastError.ifBlank { "连接失败" }}；若已 adb reverse，请确认 PC Viewer 监听 $relayPort）"
+                            } else {
+                                "提示: PC 联动接口不可用（${relayLastError.ifBlank { "连接失败" }}）"
+                            }
+                        }
+                    }
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(6) }
+            })
+        })
+
         // Manual NR add/remove
         col.addView(makeCard {
             addView(makeLabel("手动管理 NR"))
@@ -549,6 +725,7 @@ class MainActivity : AppCompatActivity() {
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
                 override fun afterTextChanged(s: Editable?) {
                     eventSearchQuery = s?.toString()?.trim().orEmpty()
+                    vm.setSearchQuery(eventSearchQuery)
                     kickResolveForSearch()
                     updateEventList(filterEvents(lastEventsAll))
                 }
@@ -556,12 +733,31 @@ class MainActivity : AppCompatActivity() {
         }
         searchBar.addView(etEventSearch)
 
+        val etTid = EditText(this).apply {
+            hint = "TID"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            layoutParams = LinearLayout.LayoutParams(dp(72), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = dp(6)
+            }
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    val tid = s?.toString()?.trim()?.toIntOrNull()
+                    vm.setTidFilter(tid)
+                }
+            })
+        }
+        searchBar.addView(etTid)
+
         searchBar.addView(Button(this).apply {
             text = "清除"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             isAllCaps = false
             setOnClickListener {
                 etEventSearch.setText("")
+                etTid.setText("")
             }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -608,6 +804,128 @@ class MainActivity : AppCompatActivity() {
         root.addView(scrollEvents)
 
         return root
+    }
+
+    private fun buildThreadTab(): View {
+        val sv = ScrollView(this).apply {
+            setBackgroundColor(cBg)
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(16))
+        }
+
+        col.addView(makeCard {
+            addView(makeLabel("线程分析器"))
+
+            val row = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+
+            val etTgid = EditText(this@MainActivity).apply {
+                hint = "TGID (进程号)"
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            row.addView(etTgid)
+
+            row.addView(Space(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(dp(8), 1) })
+
+            row.addView(Button(this@MainActivity).apply {
+                text = "使用最近"
+                isAllCaps = false
+                setOnClickListener {
+                    val t = lastEventsAll.lastOrNull()?.tgid ?: 0
+                    if (t > 0) etTgid.setText(t.toString())
+                }
+            })
+
+            row.addView(Space(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(dp(8), 1) })
+
+            val tvOut = TextView(this@MainActivity).apply {
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                typeface = Typeface.MONOSPACE
+                setTextColor(cPrimary)
+                text = "请输入 TGID 并点击刷新。"
+            }
+
+            row.addView(Button(this@MainActivity).apply {
+                text = "刷新"
+                isAllCaps = false
+                setOnClickListener {
+                    val tgid = etTgid.text.toString().trim().toIntOrNull() ?: 0
+                    if (tgid <= 0) {
+                        tvMsg.text = "提示: TGID 无效"
+                        return@setOnClickListener
+                    }
+                    lifecycleScope.launch {
+                        val dao = SvcEventDb.get(applicationContext).dao()
+                        val (stats, edges) = withContext(Dispatchers.IO) {
+                            Pair(dao.threadStats(tgid, 200), dao.threadEdges(tgid, 2000))
+                        }
+                        tvOut.text = buildString {
+                            appendLine("TGID=$tgid")
+                            appendLine()
+                            appendLine("线程统计(Top):")
+                            if (stats.isEmpty()) {
+                                appendLine("  (空)")
+                            } else {
+                                stats.forEach { appendLine("  tid=${it.pid}  cnt=${it.count}") }
+                            }
+                            appendLine()
+                            appendLine("线程树(基于 clone/clone3 ret):")
+                            appendLine(buildThreadTree(edges))
+                        }
+                    }
+                }
+            })
+
+            addView(row)
+            addView(Space(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(1, dp(8)) })
+            addView(tvOut)
+        })
+
+        sv.addView(col)
+        return sv
+    }
+
+    private fun buildThreadTree(edges: List<ThreadEdge>): String {
+        if (edges.isEmpty()) return "(空)"
+        val children = HashMap<Int, MutableList<Int>>()
+        val hasParent = HashSet<Int>()
+        val allParents = HashSet<Int>()
+        for (e in edges) {
+            val p = e.parentPid
+            val c = e.childPid.toInt()
+            if (c <= 0) continue
+            allParents.add(p)
+            hasParent.add(c)
+            children.getOrPut(p) { ArrayList() }.add(c)
+        }
+        for ((_, v) in children) v.sort()
+        val roots = (allParents - hasParent).toList().sorted()
+        val out = StringBuilder()
+        val seen = HashSet<Int>()
+        fun dfs(n: Int, indent: String) {
+            if (!seen.add(n)) return
+            out.append(indent).append(n).append('\n')
+            val cs = children[n] ?: return
+            for (c in cs) dfs(c, "$indent  ")
+        }
+        if (roots.isEmpty()) {
+            val k = children.keys.toList().sorted().firstOrNull() ?: return "(空)"
+            dfs(k, "")
+        } else {
+            for (r in roots) dfs(r, "")
+        }
+        return out.toString().trimEnd()
     }
 
     /* ══════════════════════════════════════════════════════════════
@@ -798,10 +1116,16 @@ class MainActivity : AppCompatActivity() {
         // Events list
         vm.events.observe(this) { events ->
             lastEventsAll = events
-            persistNewEvents(events)
             kickResolveCallChain(events)
             kickResolveForSearch()
             updateEventList(filterEvents(events))
+        }
+
+        vm.newEvents.observe(this) { events ->
+            if (events.isNotEmpty()) {
+                enqueueRelayEvents(events)
+                broadcastPcServerEvents(events)
+            }
         }
 
         // Toast
@@ -820,7 +1144,8 @@ class MainActivity : AppCompatActivity() {
     private fun updateEventList(events: List<StatusParser.SvcEvent>) {
         llEventList.removeAllViews()
 
-        val display = events.takeLast(100).asReversed()
+        val limit = if (eventSearchQuery.isNotBlank()) 300 else 100
+        val display = events.takeLast(limit).asReversed()
         if (display.isEmpty()) {
             llEventList.addView(TextView(this).apply {
                 text = "暂无事件。启动监控后事件将自动显示。"
@@ -866,10 +1191,10 @@ class MainActivity : AppCompatActivity() {
 
             // Row 2: pid/uid/comm
             card.addView(TextView(this).apply {
-                text = "pid=${evt.pid} uid=${evt.uid} comm=${evt.comm}"
+                text = "tgid=${evt.tgid} pid=${evt.pid} uid=${evt.uid} comm=${evt.comm}"
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
                 setTextColor(cSecondary)
-                setOnClickListener { showPidSidebar(evt.pid) }
+                setOnClickListener { showPidSidebar(evt.tgid) }
             })
 
             // Row 3: description (the deep-parsed args)
@@ -921,6 +1246,20 @@ class MainActivity : AppCompatActivity() {
                     append("bt_raw:")
                     e.bt.forEach { append(" 0x").append(java.lang.Long.toHexString(it)) }
                 }
+                if (isNotEmpty()) append('\n')
+                append("seq=").append(e.seq)
+                append(" nr=").append(e.nr)
+                append(" tgid=").append(e.tgid)
+                append(" pid=").append(e.pid)
+                append(" uid=").append(e.uid)
+                append(" ret=").append(e.ret)
+                append(" a0=").append(e.a0).append(" a1=").append(e.a1).append(" a2=").append(e.a2)
+                append(" a3=").append(e.a3).append(" a4=").append(e.a4).append(" a5=").append(e.a5)
+                append(" pc=0x").append(java.lang.Long.toHexString(e.pc))
+                append(" caller=0x").append(java.lang.Long.toHexString(e.caller))
+                append(" fp=0x").append(java.lang.Long.toHexString(e.fp))
+                append(" sp=0x").append(java.lang.Long.toHexString(e.sp))
+                if (e.cloneFn != 0L) append(" clone_fn=0x").append(java.lang.Long.toHexString(e.cloneFn))
             }
             val hit =
                 e.name.lowercase().contains(lq) ||
@@ -928,11 +1267,21 @@ class MainActivity : AppCompatActivity() {
                     e.desc.lowercase().contains(lq) ||
                     extra.contains(lq) ||
                     e.nr.toString().contains(q) ||
+                    e.tgid.toString().contains(q) ||
                     e.pid.toString().contains(q) ||
                     e.uid.toString().contains(q) ||
                     e.seq.toString().contains(q) ||
+                    e.ret.toString().contains(q) ||
                     e.pc.toString().contains(q) ||
                     e.caller.toString().contains(q) ||
+                    e.fp.toString().contains(q) ||
+                    e.sp.toString().contains(q) ||
+                    e.a0.toString().contains(q) ||
+                    e.a1.toString().contains(q) ||
+                    e.a2.toString().contains(q) ||
+                    e.a3.toString().contains(q) ||
+                    e.a4.toString().contains(q) ||
+                    e.a5.toString().contains(q) ||
                     (if (e.cloneFn != 0L) e.cloneFn.toString().contains(q) else false)
             if (hit) out.add(e)
         }
@@ -961,7 +1310,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showPidSidebar(pid: Int) {
         if (pid <= 0) return
-        val events = lastEventsAll.filter { it.pid == pid }
+        val events = lastEventsAll.filter { it.tgid == pid }
         if (events.isEmpty()) {
             tvMsg.text = "提示: PID=$pid 暂无事件"
             return
@@ -1059,6 +1408,343 @@ class MainActivity : AppCompatActivity() {
         return false
     }
 
+    private fun startRelay() {
+        if (relayJob != null) return
+        relayLastEnqueuedSeq = lastEventsAll.maxOfOrNull { it.seq } ?: 0L
+        relayQueue.clear()
+        relayJob = lifecycleScope.launch(Dispatchers.IO) {
+            while (relayEnabled) {
+                if (relayQueue.isEmpty()) {
+                    kotlinx.coroutines.delay(120)
+                    continue
+                }
+
+                val batch = ArrayList<StatusParser.SvcEvent>(128)
+                while (batch.size < 128 && relayQueue.isNotEmpty()) {
+                    batch.add(relayQueue.removeFirst())
+                }
+
+                val ok = try {
+                    postRelayBatch(batch)
+                } catch (_: Exception) {
+                    false
+                }
+
+                if (!ok) {
+                    for (i in batch.size - 1 downTo 0) {
+                        if (relayQueue.size >= 5000) relayQueue.removeFirst()
+                        relayQueue.addFirst(batch[i])
+                    }
+                    kotlinx.coroutines.delay(600)
+                }
+            }
+        }
+    }
+
+    private fun stopRelay() {
+        relayJob?.cancel()
+        relayJob = null
+        relayQueue.clear()
+    }
+
+    private fun startPcServer() {
+        if (pcServerJob != null) return
+        if (pcServerPort <= 0 || pcServerPort > 65535) pcServerPort = 8080
+        pcServerJob = lifecycleScope.launch(Dispatchers.IO) {
+            var ss: java.net.ServerSocket? = null
+            try {
+                ss = java.net.ServerSocket(pcServerPort)
+                ss.reuseAddress = true
+                pcServerSocket = ss
+                while (pcServerEnabled) {
+                    val sock = try {
+                        ss.accept()
+                    } catch (_: Exception) {
+                        break
+                    }
+                    val w = try {
+                        java.io.BufferedWriter(java.io.OutputStreamWriter(sock.getOutputStream(), Charsets.UTF_8))
+                    } catch (_: Exception) {
+                        try { sock.close() } catch (_: Exception) {}
+                        continue
+                    }
+                    synchronized(pcServerClients) { pcServerClients.add(w) }
+
+                    launch(Dispatchers.IO) {
+                        val r = try {
+                            java.io.BufferedReader(java.io.InputStreamReader(sock.getInputStream(), Charsets.UTF_8))
+                        } catch (_: Exception) {
+                            null
+                        }
+                        var dumped = false
+                        if (r != null) {
+                            try {
+                                while (pcServerEnabled && !sock.isClosed) {
+                                    val line = r.readLine() ?: break
+                                    if (line == "PING") {
+                                        try {
+                                            w.write("PONG\n")
+                                            w.flush()
+                                            if (!dumped) {
+                                                dumped = true
+                                                sendPcServerBacklog(w)
+                                            }
+                                        } catch (_: Exception) {
+                                            break
+                                        }
+                                    } else if (line.startsWith("CMD")) {
+                                        val cmd = line.removePrefix("CMD").trim()
+                                        runOnUiThread {
+                                            when (cmd) {
+                                                "STOP" -> vm.stopMonitoring()
+                                                "CLEAR_EVENTS" -> vm.clearEvents()
+                                                "CLEAR_HISTORY" -> clearHistory()
+                                            }
+                                        }
+                                        try {
+                                            w.write("OK\n")
+                                            w.flush()
+                                        } catch (_: Exception) {
+                                        }
+                                    }
+                                }
+                            } catch (_: Exception) {
+                            }
+                        }
+                        synchronized(pcServerClients) { pcServerClients.remove(w) }
+                        try { sock.close() } catch (_: Exception) {}
+                    }
+                }
+            } finally {
+                pcServerSocket = null
+                try { ss?.close() } catch (_: Exception) {}
+                synchronized(pcServerClients) {
+                    for (w in pcServerClients) {
+                        try { w.close() } catch (_: Exception) {}
+                    }
+                    pcServerClients.clear()
+                }
+                pcServerJob = null
+            }
+        }
+    }
+
+    private fun stopPcServer() {
+        pcServerJob?.cancel()
+        pcServerJob = null
+        try { pcServerSocket?.close() } catch (_: Exception) {}
+        pcServerSocket = null
+        synchronized(pcServerClients) {
+            for (w in pcServerClients) {
+                try { w.close() } catch (_: Exception) {}
+            }
+            pcServerClients.clear()
+        }
+    }
+
+    private suspend fun sendPcServerBacklog(w: java.io.BufferedWriter) {
+        val dao = SvcEventDb.get(applicationContext).dao()
+        val list = try { dao.latest(pcServerBacklogLimit) } catch (_: Exception) { emptyList() }
+        if (list.isEmpty()) return
+        try {
+            for (e in list.asReversed()) {
+                w.write(entityToJsonLine(e))
+            }
+            w.flush()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun entityToJsonLine(e: SvcEventEntity): String {
+        val obj = JSONObject().apply {
+            put("seq", e.seq)
+            put("nr", e.nr)
+            put("name", e.name)
+            put("tgid", e.tgid)
+            put("pid", e.pid)
+            put("uid", e.uid)
+            put("comm", e.comm)
+            put("pc", e.pc)
+            put("caller", e.caller)
+            put("fp", e.fp)
+            put("sp", e.sp)
+            put("bt", if (e.bt.isBlank()) JSONArray() else JSONArray(e.bt.split("|").mapNotNull { it.toLongOrNull(16) }))
+            put("clone_fn", e.cloneFn)
+            put("ret", e.ret)
+            put("a0", e.a0); put("a1", e.a1); put("a2", e.a2)
+            put("a3", e.a3); put("a4", e.a4); put("a5", e.a5)
+            put("desc", e.desc)
+            if (e.fpChain.isNotBlank()) put("fp_chain", e.fpChain)
+        }
+        return obj.toString() + "\n"
+    }
+
+    private fun broadcastPcServerEvents(events: List<StatusParser.SvcEvent>) {
+        if (!pcServerEnabled) return
+        if (events.isEmpty()) return
+        val lines = ArrayList<String>(events.size)
+        for (e in events) {
+            lines.add(eventToJsonLine(e))
+        }
+        synchronized(pcServerClients) {
+            val it = pcServerClients.iterator()
+            while (it.hasNext()) {
+                val w = it.next()
+                try {
+                    for (ln in lines) w.write(ln)
+                    w.flush()
+                } catch (_: Exception) {
+                    try { w.close() } catch (_: Exception) {}
+                    it.remove()
+                }
+            }
+        }
+    }
+
+    private fun eventToJsonLine(e: StatusParser.SvcEvent): String {
+        val obj = JSONObject().apply {
+            put("seq", e.seq)
+            put("nr", e.nr)
+            put("name", e.name)
+            put("tgid", e.tgid)
+            put("pid", e.pid)
+            put("uid", e.uid)
+            put("comm", e.comm)
+            put("pc", e.pc)
+            put("caller", e.caller)
+            put("fp", e.fp)
+            put("sp", e.sp)
+            put("bt", JSONArray(e.bt))
+            put("clone_fn", e.cloneFn)
+            put("ret", e.ret)
+            put("a0", e.a0); put("a1", e.a1); put("a2", e.a2)
+            put("a3", e.a3); put("a4", e.a4); put("a5", e.a5)
+            put("desc", e.desc)
+            eventCallChain[e.seq]?.let { put("fp_chain", it) }
+        }
+        return obj.toString() + "\n"
+    }
+
+    private fun enqueueRelayEvents(events: List<StatusParser.SvcEvent>) {
+        if (!relayEnabled) return
+        if (events.isEmpty()) return
+        val maxSeq = relayLastEnqueuedSeq
+        val newEvents = events.filter { it.seq > maxSeq }.sortedBy { it.seq }
+        if (newEvents.isEmpty()) return
+        relayLastEnqueuedSeq = newEvents.last().seq
+        for (e in newEvents) {
+            if (relayQueue.size >= 5000) relayQueue.removeFirst()
+            relayQueue.addLast(e)
+        }
+    }
+
+    private fun testRelayOnce(): Boolean {
+        relayLastError = ""
+        val okStats = getRelayStats()
+        if (!okStats && (relayPort == 5000 || relayPort == 5001)) {
+            val alt = if (relayPort == 5001) 5000 else 5001
+            val old = relayPort
+            relayPort = alt
+            val okAlt = getRelayStats()
+            if (okAlt) {
+                prefs.edit().putInt("pc_relay_port", relayPort).apply()
+                return postRelayRaw("[]")
+            }
+            relayPort = old
+        }
+        if (!okStats) return false
+        return postRelayRaw("[]")
+    }
+
+    private fun postRelayBatch(events: List<StatusParser.SvcEvent>): Boolean {
+        val arr = JSONArray()
+        for (e in events) {
+            arr.put(JSONObject().apply {
+                put("seq", e.seq)
+                put("nr", e.nr)
+                put("name", e.name)
+                put("tgid", e.tgid)
+                put("pid", e.pid)
+                put("uid", e.uid)
+                put("comm", e.comm)
+                put("pc", e.pc)
+                put("caller", e.caller)
+                put("fp", e.fp)
+                put("sp", e.sp)
+                put("bt", JSONArray(e.bt))
+                put("clone_fn", e.cloneFn)
+                put("ret", e.ret)
+                put("a0", e.a0); put("a1", e.a1); put("a2", e.a2)
+                put("a3", e.a3); put("a4", e.a4); put("a5", e.a5)
+                put("desc", e.desc)
+                eventCallChain[e.seq]?.let { put("fp_chain", it) }
+            })
+        }
+        return postRelayRaw(arr.toString())
+    }
+
+    private fun postRelayRaw(body: String): Boolean {
+        val host = relayHost.trim().removePrefix("http://").removePrefix("https://")
+        if (host.isBlank()) return false
+        if (relayPort <= 0 || relayPort > 65535) return false
+
+        var conn: HttpURLConnection? = null
+        return try {
+            val url = URL("http://$host:$relayPort/api/ingest")
+            conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 2500
+                readTimeout = 4500
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            BufferedOutputStream(conn.outputStream).use { os ->
+                os.write(body.toByteArray(Charsets.UTF_8))
+                os.flush()
+            }
+            val code = conn.responseCode
+            if (code !in 200..299) relayLastError = "HTTP $code (/api/ingest)"
+            code in 200..299
+        } catch (_: Exception) {
+            relayLastError = "网络连接失败 (/api/ingest)"
+            false
+        } finally {
+            try {
+                conn?.disconnect()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun getRelayStats(): Boolean {
+        val host = relayHost.trim().removePrefix("http://").removePrefix("https://")
+        if (host.isBlank()) {
+            relayLastError = "Host 为空"
+            return false
+        }
+        if (relayPort <= 0 || relayPort > 65535) {
+            relayLastError = "端口非法"
+            return false
+        }
+        var conn: HttpURLConnection? = null
+        return try {
+            val url = URL("http://$host:$relayPort/api/stats")
+            conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 2000
+                readTimeout = 3000
+            }
+            val code = conn.responseCode
+            if (code !in 200..299) relayLastError = "HTTP $code (/api/stats)"
+            code in 200..299
+        } catch (_: Exception) {
+            relayLastError = "网络连接失败 (/api/stats)"
+            false
+        } finally {
+            try { conn?.disconnect() } catch (_: Exception) {}
+        }
+    }
+
     private fun kickResolveCallChain(events: List<StatusParser.SvcEvent>) {
         if (resolvingChain) return
         if (events.isEmpty()) return
@@ -1071,9 +1757,14 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 for (e in batch) {
-                    val callerResolved = formatAddrSoOffset(e.pid, e.caller)
+                    val callerResolved = formatAddrSoOffset(e.tgid, e.caller)
                     val chain = buildFpCallChain(e, callerResolved)
-                    if (chain.isNotBlank()) eventCallChain[e.seq] = chain
+                    if (chain.isNotBlank()) {
+                        eventCallChain[e.seq] = chain
+                        withContext(Dispatchers.IO) {
+                            SvcEventDb.get(applicationContext).dao().updateFpChain(e.seq, chain)
+                        }
+                    }
                 }
             } finally {
                 resolvingChain = false
@@ -1096,23 +1787,28 @@ class MainActivity : AppCompatActivity() {
                 val pending = snapshot.filter { !eventSearchExtra.containsKey(it.seq) }
                 for (chunk in pending.chunked(200)) {
                     for (e in chunk) {
-                        val pcResolved = formatAddrSoOffset(e.pid, e.pc)
-                        val callerResolved = formatAddrSoOffset(e.pid, e.caller)
-                        val cloneResolved = if (e.cloneFn != 0L) formatAddrSoOffset(e.pid, e.cloneFn) else ""
+                        val pcResolved = formatAddrSoOffset(e.tgid, e.pc)
+                        val callerResolved = formatAddrSoOffset(e.tgid, e.caller)
+                        val cloneResolved = if (e.cloneFn != 0L) formatAddrSoOffset(e.tgid, e.cloneFn) else ""
                         val fdResolved = if (nrUsesFd(e.nr)) {
-                            val r = KpmBridge.readProcFdLink(e.pid, e.a0)
+                            val r = KpmBridge.readProcFdLink(e.tgid, e.a0)
                             if (r.isNotBlank()) r else ""
                         } else {
                             ""
                         }
                         val chainResolved = buildFpCallChain(e, callerResolved)
-                        if (chainResolved.isNotBlank()) eventCallChain[e.seq] = chainResolved
+                        if (chainResolved.isNotBlank()) {
+                            eventCallChain[e.seq] = chainResolved
+                            withContext(Dispatchers.IO) {
+                                SvcEventDb.get(applicationContext).dao().updateFpChain(e.seq, chainResolved)
+                            }
+                        }
                         val kernelBtResolved = if (e.bt.isNotEmpty()) {
                             buildString {
                                 var idx = 0
                                 for (a in e.bt) {
                                     if (a == 0L) continue
-                                    appendLine("#$idx ${formatAddrSoOffset(e.pid, a)}")
+                                    appendLine("#$idx ${formatAddrSoOffset(e.tgid, a)}")
                                     idx++
                                     if (idx >= 7) break
                                 }
@@ -1124,7 +1820,7 @@ class MainActivity : AppCompatActivity() {
                         val blob = buildString {
                             appendLine("#${e.seq}  ${e.name}(${e.nr})")
                             appendLine("分类: ${StatusParser.syscallCategory(e.nr)}")
-                            appendLine("PID: ${e.pid}  UID: ${e.uid}")
+                            appendLine("TGID: ${e.tgid}  PID: ${e.pid}  UID: ${e.uid}")
                             appendLine("进程名: ${e.comm}")
                             appendLine()
                             appendLine("pc: $pcResolved")
@@ -1162,7 +1858,7 @@ class MainActivity : AppCompatActivity() {
                                 appendLine()
                                 addrs.forEach { a ->
                                     val abs = "0x${java.lang.Long.toHexString(a)}"
-                                    val so = resolveAddress(e.pid, a)
+                                    val so = resolveAddress(e.tgid, a)
                                     appendLine(if (so.isNotEmpty()) "$abs -> $so" else "$abs -> unmapped")
                                 }
                             }
@@ -1178,7 +1874,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun buildFpCallChain(evt: StatusParser.SvcEvent, callerResolved: String): String {
-        if (evt.pid <= 0) return ""
+        if (evt.tgid <= 0) return ""
         if (evt.fp <= 0L) return ""
         if (callerResolved.contains("(unmapped)")) return ""
         if (callerResolved.startsWith("[anon:")) return ""
@@ -1193,7 +1889,7 @@ class MainActivity : AppCompatActivity() {
         var depth = 0
         while (depth < 7) {
             if (!seen.add(fp)) break
-            val words = KpmBridge.readProcMemQwords(evt.pid, fp, 2)
+            val words = KpmBridge.readProcMemQwords(evt.tgid, fp, 2)
             if (words.size < 2) break
             val nextFp = stripPtr(words[0])
             val lr = stripPtr(words[1])
@@ -1201,7 +1897,7 @@ class MainActivity : AppCompatActivity() {
             if (nextFp <= fp) break
             if (nextFp - fp > 0x40000L) break
 
-            val lrResolved = formatAddrSoOffset(evt.pid, lr)
+            val lrResolved = formatAddrSoOffset(evt.tgid, lr)
             if (lrResolved.contains("(unmapped)")) break
             if (lrResolved.startsWith("[anon:")) break
             lines.add("#${depth + 1} $lrResolved")
@@ -1280,9 +1976,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun showEventDetail(evt: StatusParser.SvcEvent) {
         vm.viewModelScope_launch {
-            val pcResolved = formatAddrSoOffset(evt.pid, evt.pc)
-            val callerResolved = formatAddrSoOffset(evt.pid, evt.caller)
-            val cloneResolved = if (evt.cloneFn != 0L) formatAddrSoOffset(evt.pid, evt.cloneFn) else ""
+            val pcResolved = formatAddrSoOffset(evt.tgid, evt.pc)
+            val callerResolved = formatAddrSoOffset(evt.tgid, evt.caller)
+            val cloneResolved = if (evt.cloneFn != 0L) formatAddrSoOffset(evt.tgid, evt.cloneFn) else ""
             val chainResolved = eventCallChain[evt.seq].orEmpty().ifBlank {
                 val r = buildFpCallChain(evt, callerResolved)
                 if (r.isNotBlank()) eventCallChain[evt.seq] = r
@@ -1293,7 +1989,7 @@ class MainActivity : AppCompatActivity() {
                     var idx = 0
                     for (a in evt.bt) {
                         if (a == 0L) continue
-                        val resolved = formatAddrSoOffset(evt.pid, a)
+                        val resolved = formatAddrSoOffset(evt.tgid, a)
                         appendLine("#$idx $resolved")
                         idx++
                         if (idx >= 7) break
@@ -1304,7 +2000,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             val fdResolved = if (nrUsesFd(evt.nr)) {
-                val r = KpmBridge.readProcFdLink(evt.pid, evt.a0)
+                val r = KpmBridge.readProcFdLink(evt.tgid, evt.a0)
                 if (r.isNotBlank()) r else ""
             } else {
                 ""
@@ -1315,7 +2011,7 @@ class MainActivity : AppCompatActivity() {
                 appendLine()
                 appendLine("#${evt.seq}  ${evt.name}(${evt.nr})")
                 appendLine("分类: ${StatusParser.syscallCategory(evt.nr)}")
-                appendLine("PID: ${evt.pid}  UID: ${evt.uid}")
+                appendLine("TGID: ${evt.tgid}  PID: ${evt.pid}  UID: ${evt.uid}")
                 appendLine("进程名: ${evt.comm}")
                 appendLine()
                 appendLine("pc: $pcResolved")
@@ -1356,7 +2052,7 @@ class MainActivity : AppCompatActivity() {
                     appendLine("═══ desc 地址解析 ═══")
                     addrs.forEach { a ->
                         val abs = "0x${java.lang.Long.toHexString(a)}"
-                        val so = resolveAddress(evt.pid, a)
+                        val so = resolveAddress(evt.tgid, a)
                         appendLine(if (so.isNotEmpty()) "$abs -> $so" else "$abs -> unmapped")
                     }
                 }
@@ -1366,7 +2062,7 @@ class MainActivity : AppCompatActivity() {
                 .setTitle("${evt.name}(${evt.nr})")
                 .setMessage(detail)
                 .setPositiveButton("确定", null)
-                .setNegativeButton("PID分析") { _, _ -> showPidSidebar(evt.pid) }
+                .setNegativeButton("PID分析") { _, _ -> showPidSidebar(evt.tgid) }
                 .setNeutralButton("复制") { _, _ ->
                     val clip = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
                     clip.setPrimaryClip(android.content.ClipData.newPlainText("svc_event", detail))

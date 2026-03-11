@@ -67,11 +67,11 @@ KPM_DESCRIPTION("Enhanced ARM64 SVC syscall monitor with deep arg parsing");
 /* ================================================================
  * Constants
  * ================================================================ */
-#define MAX_EVENTS      1024      // 环形缓冲区容量，最多缓存 1024 条事件
+#define MAX_EVENTS      8192      // 环形缓冲区容量（vmalloc 动态分配，提升爆发期缓冲能力）
 #define MAX_NR          512       // 支持的最大 syscall 号
 #define BITMAP_LONGS    (MAX_NR / 64 + 1) // bitmap 用 unsigned long 数组，每个 64 位
 #define OUTPUT_PATH     "/data/local/tmp/svc_out.json" // CTL0 的 JSON 输出写到这个文件
-#define EVENT_PATH      "/data/local/tmp/svc_events.jsonl"
+#define EVENT_PATH      "/data/local/tmp/svc_events.bin"
 #define DESC_BUF_SIZE   1024      // 参数描述字符串缓冲区（v8.1 从小 buffer 扩大到 1024）
 #define PATH_BUF_SIZE   1024      // 路径字符串缓冲区
 #define SMALL_BUF       128
@@ -224,7 +224,8 @@ typedef struct {
 typedef struct {
     unsigned int seq;          // 事件序列号
     int nr;                    // syscall 号
-    int pid;                   // 进程 PID
+    int tgid;                  // 进程号 (thread group id)
+    int pid;                   // 线程号 (真实 tid)
     int uid;                   // UID
     char comm[16];             // 进程名
     unsigned long a0, a1, a2, a3, a4, a5;      // 6 个参数原始值
@@ -235,6 +236,7 @@ typedef struct {
     unsigned int bt_depth;
     unsigned long bt[MAX_BT];
     unsigned long clone_fn;
+    unsigned long ret;         // syscall 返回值（仅部分 after hook 填充）
     char desc[DESC_BUF_SIZE];  // 解析后的参数描述字符串（核心输出）
 } svc_event_t;
 
@@ -258,6 +260,8 @@ static volatile int g_writer_stop = 0;
 extern unsigned long (*kallsyms_lookup_name)(const char *name);
 static long (*g_probe_kernel_read)(void *dst, const void *src, unsigned long size) = 0;
 static unsigned long (*g_copy_from_user)(void *to, const void __user *from, unsigned long n) = 0;
+typedef void (*msleep_t)(unsigned int msecs);
+static msleep_t g_msleep = 0;
 
 static unsigned long g_do_filp_open_addr = 0;
 static int g_do_filp_open_active = 0;
@@ -1574,6 +1578,7 @@ static void push_event(int nr, int uid,
                        unsigned long pc, unsigned long caller, unsigned long fp, unsigned long sp,
                        unsigned int bt_depth, const unsigned long *bt,
                        unsigned long clone_fn,
+                       unsigned long ret,
                        const char *desc)
 {
     int idx;
@@ -1581,12 +1586,23 @@ static void push_event(int nr, int uid,
 
     ev_lock();
 
+    if (g_ev_count >= MAX_EVENTS && g_msleep) {
+        int waited = 0;
+        while (g_ev_count >= MAX_EVENTS && waited < 200 && g_enabled && g_active) {
+            ev_unlock();
+            g_msleep(1);
+            waited++;
+            ev_lock();
+        }
+    }
+
     idx = g_ev_head;
     {
         svc_event_t *ev = &g_events[idx];
         ev->seq = ++g_seq;
         ev->nr = nr;
-        ev->pid = (int)raw_syscall0(__NR_getpid);
+        ev->tgid = (int)raw_syscall0(__NR_getpid);
+        ev->pid = (int)raw_syscall0(__NR_gettid);
         ev->uid = uid;
         ev->a0 = a0; ev->a1 = a1; ev->a2 = a2;
         ev->a3 = a3; ev->a4 = a4; ev->a5 = a5;
@@ -1602,6 +1618,7 @@ static void push_event(int nr, int uid,
             }
         }
         ev->clone_fn = clone_fn;
+        ev->ret = ret;
 
         {
             int ci;
@@ -1691,7 +1708,7 @@ static void before_generic(hook_fargs4_t *args, void *udata)
     /* Build detailed description */
     describe_args(nr, a0, a1, a2, a3, a4, a5, desc, sizeof(desc));
 
-    push_event(nr, uid, a0, a1, a2, a3, a4, a5, pc, caller, fp, sp, bt_depth, bt, clone_fn, desc);
+    push_event(nr, uid, a0, a1, a2, a3, a4, a5, pc, caller, fp, sp, bt_depth, bt, clone_fn, 0, desc);
 }
 
 static void do_filp_open_before(hook_fargs3_t *args, void *udata)
@@ -1766,7 +1783,7 @@ static void do_filp_open_before(hook_fargs3_t *args, void *udata)
     push_event(-1, uid,
                (unsigned long)args->arg0, (unsigned long)args->arg1, (unsigned long)args->arg2,
                0, 0, 0,
-               pc, caller, fp, sp, bt_depth, bt, 0, desc);
+               pc, caller, fp, sp, bt_depth, bt, 0, 0, desc);
 }
 
 static int install_do_filp_open(void)
@@ -1898,6 +1915,31 @@ static int is_hooked_nr(int nr)
     return 0;
 }
 
+static void after_clone_ret(hook_fargs0_t *args, void *udata)
+{
+    int nr = (int)(unsigned long)udata;
+    long ret = (long)args->ret;
+    int uid;
+    if (!g_enabled) return;
+    if (ret <= 0) return;
+    uid = (int)current_uid();
+    if (g_target_uid >= 0 && uid != g_target_uid) return;
+
+    push_event(nr, uid,
+               0, 0, 0, 0, 0, 0,
+               0, 0, 0, 0,
+               0, 0,
+               0,
+               (unsigned long)ret,
+               "clone_ret");
+}
+
+static void *hook_after_for_nr(int nr)
+{
+    if (nr == __NR_clone || nr == 435) return (void *)after_clone_ret;
+    return (void *)0;
+}
+
 /* ================================================================
  * Hook installation/removal
  * ================================================================ */
@@ -1907,7 +1949,7 @@ static int install_hook(hook_entry_t *h)
     if (h->active) return 0;
 
     err = inline_hook_syscalln(h->nr, h->narg,
-                               (void *)before_generic, (void *)0,
+                               (void *)before_generic, hook_after_for_nr(h->nr),
                                (void *)(unsigned long)h->nr);
     if (err == HOOK_NO_ERR) {
         h->active = 1;
@@ -1917,7 +1959,7 @@ static int install_hook(hook_entry_t *h)
     }
 
     err = fp_hook_syscalln(h->nr, h->narg,
-                           (void *)before_generic, (void *)0,
+                           (void *)before_generic, hook_after_for_nr(h->nr),
                            (void *)(unsigned long)h->nr);
     if (err == HOOK_NO_ERR) {
         h->active = 1;
@@ -1933,9 +1975,9 @@ static void remove_hook(hook_entry_t *h)
 {
     if (!h->active) return;
     if (h->method == HOOK_INLINE)
-        inline_unhook_syscalln(h->nr, (void *)before_generic, (void *)0);
+        inline_unhook_syscalln(h->nr, (void *)before_generic, hook_after_for_nr(h->nr));
     else
-        fp_unhook_syscalln(h->nr, (void *)before_generic, (void *)0);
+        fp_unhook_syscalln(h->nr, (void *)before_generic, hook_after_for_nr(h->nr));
     h->active = 0;
     g_hooks_installed--;
 }
@@ -2078,7 +2120,7 @@ static int write_output_file(const char *data, int len)
 
 /* Buffer for building JSON output */
 static char g_outbuf[131072];  /* 128KB for detailed event output */
-static char g_jsonl_line[8192];
+static unsigned char g_bin_line[2048];
 
 /* JSON escape */
 static int json_escape(char *dst, int dstlen, const char *src)
@@ -2117,6 +2159,7 @@ static int pop_event(svc_event_t *out)
         int i;
         out->seq = src->seq;
         out->nr = src->nr;
+        out->tgid = src->tgid;
         out->pid = src->pid;
         out->uid = src->uid;
         out->a0 = src->a0; out->a1 = src->a1; out->a2 = src->a2;
@@ -2128,6 +2171,7 @@ static int pop_event(svc_event_t *out)
         out->bt_depth = src->bt_depth;
         for (i = 0; i < MAX_BT; i++) out->bt[i] = src->bt[i];
         out->clone_fn = src->clone_fn;
+        out->ret = src->ret;
         for (i = 0; i < 16; i++) out->comm[i] = src->comm[i];
         for (i = 0; i < DESC_BUF_SIZE; i++) out->desc[i] = src->desc[i];
         g_ev_tail = (g_ev_tail + 1) % MAX_EVENTS;
@@ -2168,6 +2212,110 @@ static int format_event_jsonl(char *buf, int blen, const svc_event_t *ev)
     );
 }
 
+static int put_u16(unsigned char *buf, int blen, int *off, unsigned int v)
+{
+    if (!buf || !off) return 0;
+    if (*off + 2 > blen) return 0;
+    buf[*off + 0] = (unsigned char)(v & 0xFF);
+    buf[*off + 1] = (unsigned char)((v >> 8) & 0xFF);
+    *off += 2;
+    return 1;
+}
+
+static int put_u32(unsigned char *buf, int blen, int *off, unsigned int v)
+{
+    if (!buf || !off) return 0;
+    if (*off + 4 > blen) return 0;
+    buf[*off + 0] = (unsigned char)(v & 0xFF);
+    buf[*off + 1] = (unsigned char)((v >> 8) & 0xFF);
+    buf[*off + 2] = (unsigned char)((v >> 16) & 0xFF);
+    buf[*off + 3] = (unsigned char)((v >> 24) & 0xFF);
+    *off += 4;
+    return 1;
+}
+
+static int put_u64(unsigned char *buf, int blen, int *off, unsigned long long v)
+{
+    int i;
+    if (!buf || !off) return 0;
+    if (*off + 8 > blen) return 0;
+    for (i = 0; i < 8; i++) {
+        buf[*off + i] = (unsigned char)((v >> (8 * i)) & 0xFF);
+    }
+    *off += 8;
+    return 1;
+}
+
+static int put_bytes(unsigned char *buf, int blen, int *off, const void *src, int n)
+{
+    int i;
+    const unsigned char *s = (const unsigned char *)src;
+    if (!buf || !off || !src) return 0;
+    if (n < 0) return 0;
+    if (*off + n > blen) return 0;
+    for (i = 0; i < n; i++) buf[*off + i] = s[i];
+    *off += n;
+    return 1;
+}
+
+static int format_event_bin(unsigned char *buf, int blen, const svc_event_t *ev)
+{
+    int off = 0;
+    unsigned int desc_len;
+    unsigned int bt_depth;
+    int i;
+    if (!buf || blen <= 0 || !ev) return 0;
+
+    if (!put_u32(buf, blen, &off, 0x45435653U)) return 0;
+    if (!put_u16(buf, blen, &off, 1)) return 0;
+    if (!put_u16(buf, blen, &off, 0)) return 0;
+    if (!put_u32(buf, blen, &off, 0)) return 0;
+
+    if (!put_u32(buf, blen, &off, (unsigned int)ev->seq)) return 0;
+    if (!put_u32(buf, blen, &off, (unsigned int)ev->nr)) return 0;
+    if (!put_u32(buf, blen, &off, (unsigned int)ev->tgid)) return 0;
+    if (!put_u32(buf, blen, &off, (unsigned int)ev->pid)) return 0;
+    if (!put_u32(buf, blen, &off, (unsigned int)ev->uid)) return 0;
+
+    if (!put_u64(buf, blen, &off, (unsigned long long)ev->pc)) return 0;
+    if (!put_u64(buf, blen, &off, (unsigned long long)ev->caller)) return 0;
+    if (!put_u64(buf, blen, &off, (unsigned long long)ev->fp)) return 0;
+    if (!put_u64(buf, blen, &off, (unsigned long long)ev->sp)) return 0;
+    if (!put_u64(buf, blen, &off, (unsigned long long)ev->clone_fn)) return 0;
+    if (!put_u64(buf, blen, &off, (unsigned long long)ev->ret)) return 0;
+
+    if (!put_u64(buf, blen, &off, (unsigned long long)ev->a0)) return 0;
+    if (!put_u64(buf, blen, &off, (unsigned long long)ev->a1)) return 0;
+    if (!put_u64(buf, blen, &off, (unsigned long long)ev->a2)) return 0;
+    if (!put_u64(buf, blen, &off, (unsigned long long)ev->a3)) return 0;
+    if (!put_u64(buf, blen, &off, (unsigned long long)ev->a4)) return 0;
+    if (!put_u64(buf, blen, &off, (unsigned long long)ev->a5)) return 0;
+
+    bt_depth = ev->bt_depth > MAX_BT ? MAX_BT : ev->bt_depth;
+    if (!put_u32(buf, blen, &off, bt_depth)) return 0;
+    if (!put_u32(buf, blen, &off, 0)) return 0;
+    for (i = 0; i < MAX_BT; i++) {
+        if (!put_u64(buf, blen, &off, (unsigned long long)ev->bt[i])) return 0;
+    }
+
+    if (!put_bytes(buf, blen, &off, ev->comm, 16)) return 0;
+
+    desc_len = (unsigned int)strlen(ev->desc);
+    if (desc_len > (DESC_BUF_SIZE - 1)) desc_len = (DESC_BUF_SIZE - 1);
+    if (!put_u16(buf, blen, &off, desc_len)) return 0;
+    if (!put_u16(buf, blen, &off, 0)) return 0;
+    if (desc_len > 0) {
+        if (!put_bytes(buf, blen, &off, ev->desc, (int)desc_len)) return 0;
+    }
+
+    buf[8] = (unsigned char)(off & 0xFF);
+    buf[9] = (unsigned char)((off >> 8) & 0xFF);
+    buf[10] = (unsigned char)((off >> 16) & 0xFF);
+    buf[11] = (unsigned char)((off >> 24) & 0xFF);
+
+    return off;
+}
+
 static struct file *open_event_file_fp(int truncate)
 {
     int flags = O_WRONLY | O_CREAT;
@@ -2180,12 +2328,10 @@ static struct file *open_event_file_fp(int truncate)
 typedef struct task_struct *(*kthread_run_t)(int (*threadfn)(void *data), void *data, const char namefmt[], ...);
 typedef int (*kthread_stop_t)(struct task_struct *k);
 typedef int (*kthread_should_stop_t)(void);
-typedef void (*msleep_t)(unsigned int msecs);
 
 static kthread_run_t g_kthread_run = 0;
 static kthread_stop_t g_kthread_stop = 0;
 static kthread_should_stop_t g_kthread_should_stop = 0;
-static msleep_t g_msleep = 0;
 
 static int event_writer_thread(void *data)
 {
@@ -2228,9 +2374,9 @@ static int event_writer_thread(void *data)
                 svc_event_t ev;
                 int len;
                 if (!pop_event(&ev)) break;
-                len = format_event_jsonl(g_jsonl_line, sizeof(g_jsonl_line), &ev);
+                len = format_event_bin(g_bin_line, sizeof(g_bin_line), &ev);
                 if (len > 0) {
-                    long rc = g_kernel_write(fp, g_jsonl_line, (unsigned long)len, &pos);
+                    long rc = g_kernel_write(fp, g_bin_line, (unsigned long)len, &pos);
                     if (rc <= 0) {
                         g_filp_close(fp, 0);
                         fp = 0;
@@ -2506,12 +2652,12 @@ static long svc_ctl0(const char *args, char *__user out_msg, int outlen)
 
                     if (i > 0) n += snprintf(buf + n, blen - n, ",");
                     n += snprintf(buf + n, blen - n,
-                        "{\"seq\":%u,\"nr\":%d,\"name\":\"%s\",\"pid\":%d,\"uid\":%d,"
-                        "\"comm\":\"%s\",\"pc\":%lu,\"caller\":%lu,\"fp\":%lu,\"sp\":%lu,\"bt\":%s,\"clone_fn\":%lu,"
+                        "{\"seq\":%u,\"nr\":%d,\"name\":\"%s\",\"tgid\":%d,\"pid\":%d,\"uid\":%d,"
+                        "\"comm\":\"%s\",\"pc\":%lu,\"caller\":%lu,\"fp\":%lu,\"sp\":%lu,\"bt\":%s,\"clone_fn\":%lu,\"ret\":%lu,"
                         "\"a0\":%lu,\"a1\":%lu,\"a2\":%lu,"
                         "\"a3\":%lu,\"a4\":%lu,\"a5\":%lu,\"desc\":\"%s\"}",
-                        ev->seq, ev->nr, get_syscall_name(ev->nr), ev->pid, ev->uid,
-                        ev->comm, ev->pc, ev->caller, ev->fp, ev->sp, btbuf, ev->clone_fn,
+                        ev->seq, ev->nr, get_syscall_name(ev->nr), ev->tgid, ev->pid, ev->uid,
+                        ev->comm, ev->pc, ev->caller, ev->fp, ev->sp, btbuf, ev->clone_fn, ev->ret,
                         ev->a0, ev->a1, ev->a2,
                         ev->a3, ev->a4, ev->a5, esc);
                 }

@@ -27,7 +27,7 @@ object KpmBridge {
     private const val KPATCH = "/data/adb/ap/bin/kpatch"
     private const val MODULE = "svc_monitor"
     private const val OUT_FILE = "/data/local/tmp/svc_out.json"
-    private const val EVENT_FILE = "/data/local/tmp/svc_events.jsonl"
+    private const val EVENT_FILE = "/data/local/tmp/svc_events.bin"
     private var superKey = "XiaoLu0129"
     private val mutex = Mutex()
 
@@ -64,6 +64,22 @@ object KpmBridge {
         } catch (e: Exception) {
             Log.e(TAG, "shellExec fallback error", e)
             Pair(-1, e.message ?: "exec error")
+        }
+    }
+
+    private fun shellExecBytes(cmd: String): Pair<Int, ByteArray> {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+            val data = process.inputStream.readBytes()
+            val err = process.errorStream.readBytes()
+            val exitCode = process.waitFor()
+            if (exitCode != 0 && data.isEmpty() && err.isNotEmpty()) {
+                Pair(exitCode, err)
+            } else {
+                Pair(exitCode, data)
+            }
+        } catch (e: Exception) {
+            Pair(-1, (e.message ?: "exec error").toByteArray())
         }
     }
 
@@ -257,6 +273,22 @@ object KpmBridge {
     }
     suspend fun events() = execute("events")
     suspend fun clear() = execute("clear")
+
+    suspend fun clearEventFile(): Boolean = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            val (rc, _) = shellExecBytes(": > $EVENT_FILE")
+            rc == 0
+        }
+    }
+
+    suspend fun readEventFileChunk(offset: Long, maxBytes: Int): ByteArray = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            if (offset < 0 || maxBytes <= 0) return@withContext ByteArray(0)
+            val cmd = "dd if=$EVENT_FILE bs=1 skip=$offset count=$maxBytes 2>/dev/null"
+            val (rc, out) = shellExecBytes(cmd)
+            if (rc == 0) out else ByteArray(0)
+        }
+    }
 
     suspend fun setDoFilpOpen(enabled: Boolean) = execute(if (enabled) "filp_open on" else "filp_open off")
 

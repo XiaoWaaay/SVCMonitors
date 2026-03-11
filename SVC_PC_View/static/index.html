@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SVC Monitor — Reverse Engineering Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+:root {
+  --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --border: #30363d;
+  --text: #c9d1d9; --text2: #8b949e; --accent: #58a6ff; --green: #3fb950;
+  --red: #f85149; --orange: #d29922; --purple: #bc8cff; --cyan: #39d3f5;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace; background: var(--bg); color: var(--text); font-size: 13px; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.app { display: flex; flex-direction: column; height: 100vh; }
+.header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 8px 16px; display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+.header h1 { font-size: 15px; color: var(--accent); font-weight: 600; white-space: nowrap; }
+.header .status { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.header .dot { width: 8px; height: 8px; border-radius: 50%; }
+.dot-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.dot-red { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.header .stat-bar { display: flex; gap: 16px; margin-left: auto; font-size: 12px; color: var(--text2); }
+.stat-bar span { white-space: nowrap; }
+.stat-bar .num { color: var(--accent); font-weight: 600; }
+
+/* Tabs */
+.tabs { display: flex; background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.tab { padding: 8px 20px; cursor: pointer; color: var(--text2); border-bottom: 2px solid transparent; transition: all 0.2s; font-size: 13px; }
+.tab:hover { color: var(--text); background: var(--bg3); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Main content */
+.main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.panel { flex: 1; overflow: auto; padding: 12px; }
+
+/* Search bar */
+.search-bar { display: flex; gap: 8px; padding: 10px 12px; background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap; }
+.search-bar input, .search-bar select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 4px; font-family: inherit; font-size: 12px; }
+.search-bar input:focus, .search-bar select:focus { outline: none; border-color: var(--accent); }
+.search-bar input.query { flex: 1; min-width: 200px; }
+.search-bar button { background: var(--accent); color: #000; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600; }
+.search-bar button:hover { opacity: 0.9; }
+.search-bar button.secondary { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+.search-bar .filter-tag { background: var(--bg3); border: 1px solid var(--border); color: var(--cyan); padding: 4px 8px; border-radius: 12px; font-size: 11px; display: flex; align-items: center; gap: 4px; }
+.filter-tag .remove { cursor: pointer; color: var(--text2); }
+.filter-tag .remove:hover { color: var(--red); }
+
+/* Event table */
+.event-table { width: 100%; border-collapse: collapse; }
+.event-table th { background: var(--bg2); position: sticky; top: 0; z-index: 1; text-align: left; padding: 6px 8px; color: var(--text2); font-size: 11px; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+.event-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; font-size: 12px; }
+.event-table tr { cursor: pointer; transition: background 0.15s; }
+.event-table tr:hover { background: var(--bg3); }
+.event-table tr.antidebug { background: rgba(248,81,73,0.1); }
+.event-table tr.antidebug:hover { background: rgba(248,81,73,0.2); }
+.event-table .nr { color: var(--cyan); }
+.event-table .name { color: var(--green); font-weight: 600; }
+.event-table .pid-cell { color: var(--orange); }
+.detail-kv .pid-cell { cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.event-table .comm { color: var(--purple); }
+.event-table .args { color: var(--text2); max-width: 500px; }
+.event-table .retval-ok { color: var(--green); }
+.event-table .retval-err { color: var(--red); }
+.event-table .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; }
+.badge-antidebug { background: rgba(248,81,73,0.2); color: var(--red); }
+.badge-bt { background: rgba(88,166,255,0.2); color: var(--accent); }
+
+/* Pagination */
+.pagination { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--bg2); border-top: 1px solid var(--border); font-size: 12px; color: var(--text2); flex-shrink: 0; }
+.pagination button { background: var(--bg3); color: var(--text); border: 1px solid var(--border); padding: 4px 10px; border-radius: 3px; cursor: pointer; font-family: inherit; }
+.pagination button:disabled { opacity: 0.4; cursor: not-allowed; }
+.pagination .info { margin-left: auto; }
+
+/* Detail panel (slide-in) */
+.detail-overlay { position: fixed; top: 0; right: 0; width: 520px; height: 100vh; background: var(--bg2); border-left: 1px solid var(--border); z-index: 100; overflow-y: auto; box-shadow: -4px 0 20px rgba(0,0,0,0.5); transform: translateX(100%); transition: transform 0.25s ease; }
+.detail-overlay.show { transform: translateX(0); }
+.detail-header { position: sticky; top: 0; background: var(--bg2); padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; z-index: 1; }
+.detail-header h3 { flex: 1; font-size: 14px; color: var(--accent); }
+.detail-close { cursor: pointer; color: var(--text2); font-size: 20px; padding: 4px 8px; }
+.detail-close:hover { color: var(--red); }
+.detail-body { padding: 16px; }
+.detail-section { margin-bottom: 16px; }
+.detail-section h4 { color: var(--text2); font-size: 11px; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px; }
+.detail-kv { display: grid; grid-template-columns: 120px 1fr; gap: 2px 8px; }
+.detail-kv .k { color: var(--text2); }
+.detail-kv .v { color: var(--text); word-break: break-all; }
+.detail-kv .v.mono { font-family: 'SF Mono', monospace; }
+.backtrace-list { list-style: none; }
+.backtrace-list li { padding: 2px 0; color: var(--cyan); font-size: 12px; }
+.backtrace-list li::before { content: "→ "; color: var(--text2); }
+
+/* PID panel */
+.pid-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+.pid-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 12px; cursor: pointer; transition: all 0.2s; }
+.pid-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.pid-card .pid-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.pid-card .pid-num { font-size: 18px; font-weight: 700; color: var(--orange); }
+.pid-card .pid-comm { color: var(--purple); font-size: 14px; }
+.pid-card .pid-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 12px; }
+.pid-card .pid-stats .label { color: var(--text2); }
+.pid-card .pid-stats .value { color: var(--text); text-align: right; }
+.pid-card .syscall-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.syscall-chip { background: var(--bg3); border: 1px solid var(--border); border-radius: 3px; padding: 1px 6px; font-size: 10px; color: var(--green); }
+
+/* Chart containers */
+.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.chart-box { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+.chart-box h4 { color: var(--text2); font-size: 11px; text-transform: uppercase; margin-bottom: 8px; }
+.chart { width: 100%; height: 300px; }
+.chart-full { width: 100%; height: 400px; }
+
+/* Loading */
+.loading { text-align: center; padding: 40px; color: var(--text2); }
+
+/* Upload area */
+.upload-area { border: 2px dashed var(--border); border-radius: 8px; padding: 30px; text-align: center; color: var(--text2); margin: 12px; cursor: pointer; transition: all 0.2s; }
+.upload-area:hover { border-color: var(--accent); color: var(--accent); }
+.upload-area input { display: none; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border); }
+</style>
+</head>
+<body>
+<div id="app" class="app">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>⚡ SVC Monitor</h1>
+    <div class="status">
+      <div class="dot" :class="bridgeConnected ? 'dot-green' : 'dot-red'"></div>
+      <span>{{ bridgeConnected ? 'Connected' : 'Disconnected' }}</span>
+    </div>
+    <div class="stat-bar">
+      <span>Events: <span class="num">{{ stats.total_events || 0 }}</span></span>
+      <span>PIDs: <span class="num">{{ stats.unique_pids || 0 }}</span></span>
+      <span>Syscalls: <span class="num">{{ stats.unique_syscalls || 0 }}</span></span>
+      <span style="color:var(--red)">Anti-debug: <span class="num" style="color:var(--red)">{{ stats.antidebug_count || 0 }}</span></span>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab" :class="{ active: tab === 'events' }" @click="tab = 'events'">📋 Events</div>
+    <div class="tab" :class="{ active: tab === 'pids' }" @click="tab = 'pids'; loadPids()">🔍 PID Analysis</div>
+    <div class="tab" :class="{ active: tab === 'threads' }" @click="tab = 'threads'">🧵 Threads</div>
+    <div class="tab" :class="{ active: tab === 'maps' }" @click="tab = 'maps'">🗺 Maps</div>
+    <div class="tab" :class="{ active: tab === 'charts' }" @click="tab = 'charts'; renderCharts()">📊 Statistics</div>
+    <div class="tab" :class="{ active: tab === 'timeline' }" @click="tab = 'timeline'">⏱ Timeline</div>
+    <div class="tab" :class="{ active: tab === 'upload' }" @click="tab = 'upload'">📁 Import</div>
+  </div>
+
+  <!-- EVENTS TAB -->
+  <template v-if="tab === 'events'">
+    <div class="search-bar">
+      <input class="query" v-model="searchQuery" placeholder="Search events... (syscall name, args, comm, path, etc.)" @keyup.enter="doSearch()">
+      <input v-model.number="searchPid" placeholder="PID" style="width:80px" @keyup.enter="doSearch()">
+      <input v-model.number="searchTid" placeholder="TID" style="width:80px" @keyup.enter="doSearch()">
+      <input v-model="searchComm" placeholder="Process" style="width:100px" @keyup.enter="doSearch()">
+      <select v-model="searchNr" style="width:120px">
+        <option :value="null">All syscalls</option>
+        <option v-for="(count, name) in stats.top_syscalls" :key="name" :value="name">{{ name }} ({{ count }})</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text2)">
+        <input type="checkbox" v-model="searchAntidebug"> Anti-debug
+      </label>
+      <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text2)">
+        <input type="checkbox" v-model="searchHasRetval"> Has return
+      </label>
+      <button @click="doSearch()">Search</button>
+      <button class="secondary" @click="resetSearch()">Reset</button>
+      <button class="secondary" @click="clearAll()">Clear</button>
+      <button class="secondary" @click="stopApp()">Stop App</button>
+      <button class="secondary" @click="clearApp()">Clear App</button>
+      <button class="secondary" @click="clearAppHistory()">Clear App History</button>
+      <button class="secondary" @click="exportJsonl()">Export JSONL</button>
+      <button class="secondary" @click="exportCsv()">Export CSV</button>
+    </div>
+
+    <div class="panel" ref="eventPanel">
+      <table class="event-table">
+        <thead>
+          <tr>
+            <th style="width:40px">#</th>
+            <th style="width:50px">NR</th>
+            <th style="width:130px">Syscall</th>
+            <th style="width:70px">PID</th>
+            <th style="width:70px">TID</th>
+            <th style="width:100px">Process</th>
+            <th>Args</th>
+            <th style="width:70px">Return</th>
+            <th style="width:80px">Duration</th>
+            <th style="width:50px">Info</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(ev, i) in events" :key="ev._idx || i"
+              :class="{ antidebug: ev.antidebug }"
+              @click="showDetail(ev, searchResult.indices ? searchResult.indices[i] : i)">
+            <td>{{ searchResult.indices ? searchResult.indices[i] : (searchOffset + i) }}</td>
+            <td class="nr">{{ ev.nr }}</td>
+            <td class="name">{{ ev.name || ('syscall_' + ev.nr) }}</td>
+            <td class="pid-cell" @click.stop="filterByPid(ev.pid)">{{ ev.pid }}</td>
+            <td>{{ ev.tid || '-' }}</td>
+            <td class="comm">{{ ev.comm }}</td>
+            <td class="args" :title="ev.args">{{ ev.args || '-' }}</td>
+            <td :class="ev.retval < 0 ? 'retval-err' : 'retval-ok'">{{ ev.has_retval ? ev.retval : '-' }}</td>
+            <td>{{ ev.duration_ns ? (ev.duration_ns / 1000).toFixed(1) + 'μs' : '-' }}</td>
+            <td>
+              <span v-if="ev.antidebug" class="badge badge-antidebug">AD</span>
+              <span v-if="ev.bt_depth > 0" class="badge badge-bt">BT</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-if="events.length === 0" class="loading">No events{{ searchQuery ? ' matching your search' : '' }}</div>
+    </div>
+
+    <div class="pagination">
+      <button @click="prevPage()" :disabled="searchOffset <= 0">← Prev</button>
+      <button @click="nextPage()" :disabled="events.length < searchLimit">Next →</button>
+      <select v-model.number="searchLimit" @change="doSearch()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);padding:3px;font-family:inherit;">
+        <option :value="50">50/page</option>
+        <option :value="100">100/page</option>
+        <option :value="200">200/page</option>
+        <option :value="500">500/page</option>
+        <option :value="1000">1000/page</option>
+      </select>
+      <div class="info">
+        Showing {{ searchOffset + 1 }}-{{ searchOffset + events.length }}
+        <span v-if="searchResult.total"> of {{ searchResult.total }}</span>
+      </div>
+    </div>
+  </template>
+
+  <!-- THREADS TAB -->
+  <template v-if="tab === 'threads'">
+    <div class="search-bar">
+      <input v-model.number="threadPid" placeholder="PID (TGID)" style="width:120px" @keyup.enter="loadThreads()">
+      <button @click="loadThreads()">Analyze</button>
+      <button class="secondary" @click="threadPid = null; threadResult=null">Reset</button>
+    </div>
+    <div class="panel">
+      <div v-if="!threadResult" class="loading">Enter PID (TGID) to analyze threads.</div>
+      <div v-else style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="chart-box">
+          <h4>Thread Stats</h4>
+          <div style="white-space:pre-wrap;color:var(--text);font-size:12px;">
+            <div v-if="threadResult.threads && threadResult.threads.length">
+              <div v-for="t in threadResult.threads" :key="t.tid">tid={{t.tid}}  cnt={{t.count}}</div>
+            </div>
+            <div v-else>(empty)</div>
+          </div>
+        </div>
+        <div class="chart-box">
+          <h4>Thread Tree (clone/clone3)</h4>
+          <pre style="white-space:pre-wrap;color:var(--text);font-size:12px;margin:0;">{{ threadResult.tree || '(empty)' }}</pre>
+          <div style="color:var(--text2);margin-top:8px;">Edges: {{ threadResult.edge_count || 0 }}</div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- MAPS TAB -->
+  <template v-if="tab === 'maps'">
+    <div class="search-bar">
+      <input v-model.number="mapsPid" placeholder="PID (TGID)" style="width:140px" @keyup.enter="loadMaps()">
+      <button @click="loadMaps()">Load</button>
+      <button class="secondary" @click="mapsPid=null; mapsText=''; mapsErr=''">Reset</button>
+    </div>
+    <div class="panel">
+      <div v-if="mapsErr" style="color:var(--red);white-space:pre-wrap;">{{ mapsErr }}</div>
+      <pre v-if="mapsText" style="white-space:pre;overflow:auto;background:var(--bg2);border:1px solid var(--border);padding:12px;border-radius:6px;">{{ mapsText }}</pre>
+      <div v-if="!mapsText && !mapsErr" class="loading">Enter PID (TGID) and load /proc/&lt;pid&gt;/maps.</div>
+    </div>
+  </template>
+
+  <!-- PID ANALYSIS TAB -->
+  <template v-if="tab === 'pids'">
+    <div class="search-bar">
+      <input class="query" v-model="pidSearch" placeholder="Filter by PID or process name..." @input="filterPids()">
+      <span style="color:var(--text2);font-size:12px">{{ filteredPids.length }} processes</span>
+    </div>
+    <div class="panel">
+      <!-- PID Detail View -->
+      <template v-if="selectedPid !== null">
+        <div style="margin-bottom:12px">
+          <button class="secondary" @click="selectedPid = null" style="background:var(--bg3);color:var(--text);border:1px solid var(--border);padding:6px 12px;border-radius:4px;cursor:pointer;font-family:inherit;">← Back to all PIDs</button>
+          <span style="margin-left:12px;font-size:16px;color:var(--orange);font-weight:700">PID {{ selectedPid }}</span>
+          <span style="margin-left:8px;color:var(--purple)">{{ selectedPidComm }}</span>
+          <button class="secondary" @click="exportJsonl(selectedPid)" style="margin-left:12px;background:var(--bg3);color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:4px;cursor:pointer;font-family:inherit;">Export PID JSONL</button>
+        </div>
+
+        <!-- PID Timeline Chart -->
+        <div class="chart-box" style="margin-bottom:12px">
+          <h4>Syscall Timeline</h4>
+          <div id="pidTimelineChart" class="chart-full"></div>
+        </div>
+
+        <!-- PID Events -->
+        <table class="event-table">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th style="width:50px">NR</th>
+              <th style="width:130px">Syscall</th>
+              <th style="width:70px">TID</th>
+              <th>Args</th>
+              <th style="width:70px">Return</th>
+              <th style="width:80px">Duration</th>
+              <th style="width:50px">Info</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(ev, i) in pidEvents" :key="i"
+                :class="{ antidebug: ev.antidebug }"
+                @click="showDetail(ev, i)">
+              <td>{{ pidEventsOffset + i }}</td>
+              <td class="nr">{{ ev.nr }}</td>
+              <td class="name">{{ ev.name || ('syscall_' + ev.nr) }}</td>
+              <td>{{ ev.tid || '-' }}</td>
+              <td class="args" :title="ev.args">{{ ev.args || '-' }}</td>
+              <td :class="ev.retval < 0 ? 'retval-err' : 'retval-ok'">{{ ev.has_retval ? ev.retval : '-' }}</td>
+              <td>{{ ev.duration_ns ? (ev.duration_ns / 1000).toFixed(1) + 'μs' : '-' }}</td>
+              <td>
+                <span v-if="ev.antidebug" class="badge badge-antidebug">AD</span>
+                <span v-if="ev.bt_depth > 0" class="badge badge-bt">BT</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="pagination">
+          <button @click="pidEventsOffset = Math.max(0, pidEventsOffset - 200); loadPidEvents()" :disabled="pidEventsOffset <= 0">← Prev</button>
+          <button @click="pidEventsOffset += 200; loadPidEvents()" :disabled="pidEvents.length < 200">Next →</button>
+          <div class="info">Offset: {{ pidEventsOffset }}, Total: {{ pidEventsTotal }}</div>
+        </div>
+      </template>
+
+      <!-- PID Grid -->
+      <template v-else>
+        <div class="pid-grid">
+          <div class="pid-card" v-for="p in filteredPids" :key="p.pid" @click="selectPid(p)">
+            <div class="pid-header">
+              <span class="pid-num">{{ p.pid }}</span>
+              <span class="pid-comm">{{ p.comm }}</span>
+              <span v-if="p.antidebug_count > 0" class="badge badge-antidebug" style="margin-left:auto">{{ p.antidebug_count }} AD</span>
+            </div>
+            <div class="pid-stats">
+              <span class="label">Events</span><span class="value">{{ p.event_count }}</span>
+              <span class="label">Threads</span><span class="value">{{ p.tid_count }}</span>
+              <span class="label">UID</span><span class="value">{{ p.uid }}</span>
+            </div>
+            <div class="syscall-chips">
+              <span class="syscall-chip" v-for="(cnt, name) in p.top_syscalls" :key="name">{{ name }}: {{ cnt }}</span>
+            </div>
+          </div>
+        </div>
+        <div v-if="filteredPids.length === 0" class="loading">No processes found</div>
+      </template>
+    </div>
+  </template>
+
+  <!-- CHARTS TAB -->
+  <template v-if="tab === 'charts'">
+    <div class="panel">
+      <div class="chart-row">
+        <div class="chart-box">
+          <h4>Top 20 Syscalls</h4>
+          <div id="syscallBarChart" class="chart"></div>
+        </div>
+        <div class="chart-box">
+          <h4>Syscall Distribution</h4>
+          <div id="syscallPieChart" class="chart"></div>
+        </div>
+      </div>
+      <div class="chart-row">
+        <div class="chart-box">
+          <h4>Top 20 Processes by Event Count</h4>
+          <div id="pidBarChart" class="chart"></div>
+        </div>
+        <div class="chart-box">
+          <h4>Event Rate (events/2s)</h4>
+          <div id="rateChart" class="chart"></div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- TIMELINE TAB -->
+  <template v-if="tab === 'timeline'">
+    <div class="search-bar">
+      <input v-model.number="timelinePid" placeholder="Enter PID for timeline" style="width:120px" @keyup.enter="loadTimeline()">
+      <button @click="loadTimeline()">Load Timeline</button>
+    </div>
+    <div class="panel">
+      <div class="chart-box">
+        <h4>Syscall Timeline for PID {{ timelinePid || '(enter PID above)' }}</h4>
+        <div id="globalTimelineChart" style="width:100%;height:500px;"></div>
+      </div>
+    </div>
+  </template>
+
+  <!-- UPLOAD TAB -->
+  <template v-if="tab === 'upload'">
+    <div class="panel">
+      <div class="upload-area" @click="$refs.fileInput.click()" @dragover.prevent @drop.prevent="handleDrop">
+        <p style="font-size:24px;margin-bottom:8px">📁</p>
+        <p>Click or drag JSONL file here for offline analysis</p>
+        <p style="font-size:11px;margin-top:4px">Supports .jsonl files from SVC Monitor</p>
+        <input type="file" ref="fileInput" accept=".jsonl,.json,.txt" @change="uploadFile">
+      </div>
+      <div v-if="uploadStatus" style="text-align:center;padding:20px;color:var(--green)">{{ uploadStatus }}</div>
+    </div>
+  </template>
+
+  <!-- Detail Slide Panel -->
+  <div class="detail-overlay" :class="{ show: detailEvent !== null }">
+    <div class="detail-header">
+      <h3>Event Detail</h3>
+      <span class="detail-close" @click="detailEvent = null">✕</span>
+    </div>
+    <div class="detail-body" v-if="detailEvent">
+      <div class="detail-section">
+        <h4>Basic Info</h4>
+        <div class="detail-kv">
+          <span class="k">Syscall</span><span class="v name">{{ detailEvent.name }} (#{{ detailEvent.nr }})</span>
+          <span class="k">PID</span><span class="v pid-cell" @click.stop="openPidFromDetail(detailEvent)">{{ detailEvent.pid }}</span>
+          <span class="k">TID</span><span class="v">{{ detailEvent.tid || '-' }}</span>
+          <span class="k">UID</span><span class="v">{{ detailEvent.uid }}</span>
+          <span class="k">Process</span><span class="v comm">{{ detailEvent.comm }}</span>
+          <span class="k">Timestamp</span><span class="v mono">{{ detailEvent.timestamp_ns ? (detailEvent.timestamp_ns / 1e9).toFixed(6) + 's' : '-' }}</span>
+        </div>
+      </div>
+
+      <div class="detail-section" v-if="detailEvent.args">
+        <h4>Arguments</h4>
+        <pre style="background:var(--bg);padding:10px;border-radius:4px;overflow-x:auto;white-space:pre-wrap;font-size:12px;color:var(--text);border:1px solid var(--border);">{{ detailEvent.args }}</pre>
+      </div>
+
+      <div class="detail-section" v-if="detailEvent.fp_chain">
+        <h4>Call Chain (FP)</h4>
+        <pre style="background:var(--bg);padding:10px;border-radius:4px;overflow-x:auto;white-space:pre-wrap;font-size:12px;color:var(--cyan);border:1px solid var(--border);">{{ detailEvent.fp_chain }}</pre>
+      </div>
+
+      <div class="detail-section" v-if="detailEvent.has_retval">
+        <h4>Return Value</h4>
+        <div class="detail-kv">
+          <span class="k">retval</span><span class="v" :class="detailEvent.retval < 0 ? 'retval-err' : 'retval-ok'">{{ detailEvent.retval }} (0x{{ (detailEvent.retval >>> 0).toString(16) }})</span>
+          <span class="k">Duration</span><span class="v">{{ detailEvent.duration_ns ? (detailEvent.duration_ns / 1000).toFixed(2) + ' μs (' + (detailEvent.duration_ns / 1e6).toFixed(3) + ' ms)' : '-' }}</span>
+        </div>
+      </div>
+
+      <div class="detail-section" v-if="detailEvent.bt_depth > 0">
+        <h4>Backtrace ({{ detailEvent.bt_depth }} frames)</h4>
+        <ul class="backtrace-list">
+          <li v-for="(addr, i) in parseBacktrace(detailEvent)" :key="i">
+            #{{ i }} 0x{{ addr }}
+          </li>
+        </ul>
+      </div>
+
+      <div class="detail-section" v-if="detailEvent.vma_info">
+        <h4>VMA Info</h4>
+        <pre style="background:var(--bg);padding:10px;border-radius:4px;font-size:12px;color:var(--cyan);border:1px solid var(--border);">{{ detailEvent.vma_info }}</pre>
+      </div>
+
+      <div class="detail-section" v-if="detailEvent.antidebug">
+        <h4>⚠️ Anti-Debug Detection</h4>
+        <div style="background:rgba(248,81,73,0.15);padding:10px;border-radius:4px;border:1px solid rgba(248,81,73,0.3);color:var(--red);">
+          This syscall is flagged as potential anti-debug/anti-tampering behavior.
+        </div>
+      </div>
+
+      <div class="detail-section">
+        <h4>Raw JSON</h4>
+        <pre style="background:var(--bg);padding:10px;border-radius:4px;overflow-x:auto;font-size:11px;color:var(--text2);max-height:300px;overflow-y:auto;border:1px solid var(--border);">{{ JSON.stringify(detailEvent, null, 2) }}</pre>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const { createApp, ref, reactive, computed, onMounted, nextTick, watch } = Vue;
+
+createApp({
+  setup() {
+    // ─── State ───
+    const tab = ref('events');
+    const bridgeConnected = ref(false);
+    const stats = reactive({ total_events: 0, unique_pids: 0, unique_syscalls: 0, antidebug_count: 0, top_syscalls: {}, top_pids: {} });
+
+    // Events
+    const events = ref([]);
+    const searchQuery = ref('');
+    const searchPid = ref(null);
+    const searchTid = ref(null);
+    const searchComm = ref('');
+    const searchNr = ref(null);
+    const searchAntidebug = ref(false);
+    const searchHasRetval = ref(false);
+    const searchOffset = ref(0);
+    const searchLimit = ref(100);
+    const searchResult = reactive({ total: 0, indices: null });
+
+    // Detail
+    const detailEvent = ref(null);
+
+    const mapsPid = ref(null);
+    const mapsText = ref('');
+    const mapsErr = ref('');
+
+    // PIDs
+    const pids = ref([]);
+    const filteredPids = ref([]);
+    const pidSearch = ref('');
+    const selectedPid = ref(null);
+    const selectedPidComm = ref('');
+    const pidEvents = ref([]);
+    const pidEventsOffset = ref(0);
+    const pidEventsTotal = ref(0);
+
+    // Timeline
+    const timelinePid = ref(null);
+
+    // Upload
+    const uploadStatus = ref('');
+
+    // Rate tracking
+    const rateHistory = ref([]);
+    let lastTotal = 0;
+
+    // ─── Socket.IO ───
+    const socket = io();
+
+    socket.on('bridge_status', (data) => {
+      bridgeConnected.value = data.connected;
+    });
+
+    socket.on('stats_update', (data) => {
+      Object.assign(stats, data);
+
+      // Track rate
+      const now = new Date().toLocaleTimeString();
+      const rate = stats.total_events - lastTotal;
+      lastTotal = stats.total_events;
+      rateHistory.value.push({ time: now, rate });
+      if (rateHistory.value.length > 60) rateHistory.value.shift();
+    });
+
+    socket.on('new_event', (data) => {
+      // If in live mode (no search filter), append to events
+      if (!searchQuery.value && !searchPid.value && !searchComm.value && !searchNr.value && !searchAntidebug.value) {
+        events.value.push(data.event);
+        // Keep last N events in view
+        if (events.value.length > searchLimit.value * 2) {
+          events.value = events.value.slice(-searchLimit.value);
+          searchOffset.value = Math.max(0, data.idx - searchLimit.value + 1);
+        }
+      }
+    });
+
+    // ─── API calls ───
+    async function doSearch() {
+      const params = new URLSearchParams();
+      if (searchQuery.value) params.set('q', searchQuery.value);
+      if (searchPid.value) params.set('pid', searchPid.value);
+      if (searchTid.value) params.set('tid', searchTid.value);
+      if (searchComm.value) params.set('comm', searchComm.value);
+      if (searchNr.value) params.set('nr', searchNr.value);
+      if (searchAntidebug.value) params.set('antidebug', '1');
+      if (searchHasRetval.value) params.set('has_retval', '1');
+      params.set('offset', searchOffset.value);
+      params.set('limit', searchLimit.value);
+
+      const resp = await fetch('/api/search?' + params);
+      const data = await resp.json();
+      events.value = data.events;
+      searchResult.total = data.total;
+      searchResult.indices = data.indices;
+    }
+
+    function resetSearch() {
+      searchQuery.value = '';
+      searchPid.value = null;
+      searchTid.value = null;
+      searchComm.value = '';
+      searchNr.value = null;
+      searchAntidebug.value = false;
+      searchHasRetval.value = false;
+      searchOffset.value = 0;
+      searchResult.total = 0;
+      searchResult.indices = null;
+      events.value = [];
+      doSearch();
+    }
+
+    async function clearAll() {
+      await fetch('/api/clear', { method: 'POST' });
+      resetSearch();
+    }
+
+    async function stopApp() {
+      await fetch('/api/app/stop', { method: 'POST' });
+    }
+
+    async function clearApp() {
+      await fetch('/api/app/clear', { method: 'POST' });
+      await fetch('/api/clear', { method: 'POST' });
+      resetSearch();
+    }
+
+    async function clearAppHistory() {
+      await fetch('/api/app/clear_history', { method: 'POST' });
+    }
+
+    async function loadMaps() {
+      mapsErr.value = '';
+      mapsText.value = '';
+      if (!mapsPid.value) return;
+      const resp = await fetch('/api/maps?pid=' + mapsPid.value);
+      const data = await resp.json();
+      if (data.ok) {
+        mapsText.value = data.maps || '';
+      } else {
+        mapsErr.value = data.error || 'failed';
+      }
+    }
+
+    function prevPage() {
+      searchOffset.value = Math.max(0, searchOffset.value - searchLimit.value);
+      doSearch();
+    }
+    function nextPage() {
+      searchOffset.value += searchLimit.value;
+      doSearch();
+    }
+
+    function filterByPid(pid) {
+      searchPid.value = pid;
+      searchOffset.value = 0;
+      doSearch();
+    }
+
+    function showDetail(ev, idx) {
+      detailEvent.value = ev;
+    }
+
+    function parseBacktrace(ev) {
+      if (!ev.backtrace) return [];
+      if (typeof ev.backtrace === 'string') {
+        return ev.backtrace.split(',').map(s => s.trim());
+      }
+      if (Array.isArray(ev.backtrace)) {
+        return ev.backtrace.map(a => typeof a === 'number' ? a.toString(16) : a);
+      }
+      return [];
+    }
+
+    // ─── PID Analysis ───
+    async function loadPids() {
+      const resp = await fetch('/api/pids');
+      pids.value = await resp.json();
+      filterPids();
+    }
+
+    function filterPids() {
+      const q = pidSearch.value.toLowerCase();
+      if (!q) {
+        filteredPids.value = pids.value;
+      } else {
+        filteredPids.value = pids.value.filter(p =>
+          String(p.pid).includes(q) || (p.comm || '').toLowerCase().includes(q)
+        );
+      }
+    }
+
+    async function selectPid(p) {
+      selectedPid.value = p.pid;
+      selectedPidComm.value = p.comm;
+      pidEventsOffset.value = 0;
+      await loadPidEvents();
+      await nextTick();
+      renderPidTimeline();
+    }
+
+    async function openPidFromDetail(ev) {
+      if (!ev || !ev.pid) return;
+      tab.value = 'pids';
+      await loadPids();
+      await selectPid({ pid: ev.pid, comm: ev.comm || '' });
+    }
+
+    const threadPid = ref(null);
+    const threadResult = ref(null);
+    async function loadThreads() {
+      if (!threadPid.value) return;
+      const resp = await fetch('/api/thread_analyze?pid=' + threadPid.value);
+      threadResult.value = await resp.json();
+    }
+
+    async function loadPidEvents() {
+      const resp = await fetch('/api/pid/' + selectedPid.value + '/events?offset=' + pidEventsOffset.value + '&limit=200');
+      const data = await resp.json();
+      pidEvents.value = data.events;
+      pidEventsTotal.value = data.total;
+    }
+
+    async function renderPidTimeline() {
+      const resp = await fetch('/api/pid/' + selectedPid.value + '/timeline');
+      const data = await resp.json();
+      const el = document.getElementById('pidTimelineChart');
+      if (!el) return;
+      const chart = echarts.init(el, 'dark');
+
+      const baseTs = data.length > 0 ? data[0].ts : 0;
+      const scatterData = data.map(d => [
+        ((d.ts - baseTs) / 1e6).toFixed(2),
+        d.nr,
+        d.name,
+        d.duration ? (d.duration / 1000).toFixed(1) : '0',
+        d.antidebug ? 1 : 0,
+      ]);
+
+      chart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: {
+          trigger: 'item',
+          formatter: p => {
+            const d = p.data;
+            return 'Time: ' + d[0] + 'ms<br>Syscall: ' + d[2] + ' (#' + d[1] + ')<br>Duration: ' + d[3] + 'μs' + (d[4] ? '<br><b style="color:#f85149">ANTI-DEBUG</b>' : '');
+          }
+        },
+        xAxis: { type: 'value', name: 'Time (ms)', nameTextStyle: { color: '#8b949e' }, axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
+        yAxis: { type: 'value', name: 'Syscall NR', nameTextStyle: { color: '#8b949e' }, axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
+        series: [{
+          type: 'scatter',
+          symbolSize: d => d[4] ? 10 : 5,
+          data: scatterData,
+          itemStyle: { color: d => d.data[4] ? '#f85149' : '#58a6ff' },
+        }]
+      });
+      chart.resize();
+    }
+
+    // ─── Charts ───
+    function renderCharts() {
+      nextTick(() => {
+        // Syscall bar chart
+        const barEl = document.getElementById('syscallBarChart');
+        if (barEl) {
+          const chart = echarts.init(barEl, 'dark');
+          const names = Object.keys(stats.top_syscalls || {});
+          const values = Object.values(stats.top_syscalls || {});
+          chart.setOption({
+            backgroundColor: 'transparent',
+            tooltip: { trigger: 'axis' },
+            xAxis: { type: 'category', data: names, axisLabel: { rotate: 45, color: '#8b949e', fontSize: 10 }, splitLine: { show: false } },
+            yAxis: { type: 'value', axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
+            series: [{ type: 'bar', data: values, itemStyle: { color: '#3fb950' } }],
+            grid: { bottom: 80 },
+          });
+          chart.resize();
+        }
+
+        // Pie chart
+        const pieEl = document.getElementById('syscallPieChart');
+        if (pieEl) {
+          const chart = echarts.init(pieEl, 'dark');
+          const data = Object.entries(stats.top_syscalls || {}).map(([n, v]) => ({ name: n, value: v }));
+          chart.setOption({
+            backgroundColor: 'transparent',
+            tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+            series: [{ type: 'pie', radius: ['35%', '65%'], data, label: { color: '#8b949e', fontSize: 10 }, itemStyle: { borderColor: '#161b22', borderWidth: 1 } }],
+          });
+          chart.resize();
+        }
+
+        // PID bar chart
+        const pidEl = document.getElementById('pidBarChart');
+        if (pidEl) {
+          const chart = echarts.init(pidEl, 'dark');
+          const entries = Object.entries(stats.top_pids || {}).sort((a, b) => b[1] - a[1]).slice(0, 20);
+          chart.setOption({
+            backgroundColor: 'transparent',
+            tooltip: { trigger: 'axis' },
+            xAxis: { type: 'category', data: entries.map(e => 'PID ' + e[0]), axisLabel: { rotate: 45, color: '#8b949e', fontSize: 10 }, splitLine: { show: false } },
+            yAxis: { type: 'value', axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
+            series: [{ type: 'bar', data: entries.map(e => e[1]), itemStyle: { color: '#d29922' } }],
+            grid: { bottom: 80 },
+          });
+          chart.resize();
+        }
+
+        // Rate chart
+        const rateEl = document.getElementById('rateChart');
+        if (rateEl) {
+          const chart = echarts.init(rateEl, 'dark');
+          chart.setOption({
+            backgroundColor: 'transparent',
+            tooltip: { trigger: 'axis' },
+            xAxis: { type: 'category', data: rateHistory.value.map(r => r.time), axisLabel: { color: '#8b949e', fontSize: 10 }, splitLine: { show: false } },
+            yAxis: { type: 'value', axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
+            series: [{ type: 'line', data: rateHistory.value.map(r => r.rate), smooth: true, areaStyle: { opacity: 0.2 }, lineStyle: { color: '#58a6ff' }, itemStyle: { color: '#58a6ff' } }],
+          });
+          chart.resize();
+        }
+      });
+    }
+
+    // ─── Timeline ───
+    async function loadTimeline() {
+      if (!timelinePid.value) return;
+      const resp = await fetch('/api/pid/' + timelinePid.value + '/timeline');
+      const data = await resp.json();
+      const el = document.getElementById('globalTimelineChart');
+      if (!el) return;
+      const chart = echarts.init(el, 'dark');
+
+      const baseTs = data.length > 0 ? data[0].ts : 0;
+
+      // Group by syscall name for color coding
+      const groups = {};
+      data.forEach(d => {
+        if (!groups[d.name]) groups[d.name] = [];
+        groups[d.name].push([
+          ((d.ts - baseTs) / 1e6).toFixed(2),
+          d.duration ? Math.log10(d.duration + 1) : 0,
+          d.name,
+          d.nr,
+          d.duration ? (d.duration / 1000).toFixed(1) : '0',
+          d.antidebug ? 1 : 0,
+          d.retval,
+          d.tid,
+        ]);
+      });
+
+      const series = Object.entries(groups).map(([name, pts]) => ({
+        name,
+        type: 'scatter',
+        symbolSize: d => d[5] ? 12 : 5,
+        data: pts,
+      }));
+
+      chart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: {
+          trigger: 'item',
+          formatter: p => {
+            const d = p.data;
+            let s = '<b>' + d[2] + '</b> (#' + d[3] + ')<br>';
+            s += 'Time: ' + d[0] + 'ms<br>';
+            s += 'Duration: ' + d[4] + 'μs<br>';
+            s += 'TID: ' + d[7] + '<br>';
+            if (d[6] !== undefined && d[6] !== null) s += 'Return: ' + d[6] + '<br>';
+            if (d[5]) s += '<b style="color:#f85149">ANTI-DEBUG</b>';
+            return s;
+          }
+        },
+        legend: { type: 'scroll', bottom: 0, textStyle: { color: '#8b949e', fontSize: 10 } },
+        xAxis: { type: 'value', name: 'Time (ms)', nameTextStyle: { color: '#8b949e' }, axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
+        yAxis: { type: 'value', name: 'Duration (log10 ns)', nameTextStyle: { color: '#8b949e' }, axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
+        dataZoom: [{ type: 'inside' }, { type: 'slider', bottom: 30 }],
+        series,
+      });
+      chart.resize();
+    }
+
+    // ─── Export ───
+    function exportJsonl(pid) {
+      const url = pid ? '/api/export/jsonl?pid=' + pid : '/api/export/jsonl';
+      window.open(url);
+    }
+    function exportCsv(pid) {
+      const url = pid ? '/api/export/csv?pid=' + pid : '/api/export/csv';
+      window.open(url);
+    }
+
+    // ─── Upload ───
+    async function uploadFile(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append('file', file);
+      uploadStatus.value = 'Uploading...';
+      const resp = await fetch('/api/load', { method: 'POST', body: fd });
+      const data = await resp.json();
+      uploadStatus.value = 'Loaded ' + data.loaded + ' events (total: ' + data.total + ')';
+      socket.emit('request_stats');
+    }
+
+    function handleDrop(e) {
+      const file = e.dataTransfer.files[0];
+      if (file) {
+        const fd = new FormData();
+        fd.append('file', file);
+        fetch('/api/load', { method: 'POST', body: fd }).then(r => r.json()).then(data => {
+          uploadStatus.value = 'Loaded ' + data.loaded + ' events (total: ' + data.total + ')';
+          socket.emit('request_stats');
+        });
+      }
+    }
+
+    // ─── Init ───
+    onMounted(() => {
+      doSearch();
+    });
+
+    return {
+      tab, bridgeConnected, stats,
+      events, searchQuery, searchPid, searchTid, searchComm, searchNr, searchAntidebug, searchHasRetval,
+      searchOffset, searchLimit, searchResult,
+      detailEvent, doSearch, resetSearch, prevPage, nextPage, filterByPid, showDetail, parseBacktrace,
+      pids, filteredPids, pidSearch, selectedPid, selectedPidComm, pidEvents, pidEventsOffset, pidEventsTotal,
+      loadPids, filterPids, selectPid, loadPidEvents, openPidFromDetail,
+      timelinePid, loadTimeline,
+      renderCharts, rateHistory,
+      uploadStatus, uploadFile, handleDrop,
+      exportJsonl, exportCsv, clearAll, stopApp, clearApp, clearAppHistory,
+      threadPid, threadResult, loadThreads,
+      mapsPid, mapsText, mapsErr, loadMaps,
+    };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>

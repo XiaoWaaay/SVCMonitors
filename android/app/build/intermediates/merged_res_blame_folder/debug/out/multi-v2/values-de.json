@@ -1,7 +1,7 @@
 {
     "logs": [
         {
-            "outputFile": "com.svcmonitor.app-mergeDebugResources-24:/values-de/values-de.xml",
+            "outputFile": "com.svcmonitor.app-mergeDebugResources-28:/values-de/values-de.xml",
             "map": [
                 {
                     "source": "/Users/bytedance/.gradle/caches/transforms-3/cd848766efe9399acf47483dd5ee5b45/transformed/appcompat-1.6.1/res/values-de/values-de.xml",
