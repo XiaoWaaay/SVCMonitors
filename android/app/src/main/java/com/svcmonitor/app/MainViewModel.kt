@@ -47,7 +47,7 @@ class MainViewModel : ViewModel() {
     val newEvents: LiveData<List<StatusParser.SvcEvent>> = _newEvents
     private val eventBuffer = mutableListOf<StatusParser.SvcEvent>()
     private val maxEvents = 120
-    var doFilpOpenEnabled: Boolean = true
+    var doFilpOpenEnabled: Boolean = false
 
     private val _eventCount = MutableLiveData(0)
     val eventCount: LiveData<Int> = _eventCount
@@ -61,7 +61,7 @@ class MainViewModel : ViewModel() {
     val monitoring: LiveData<Boolean> = _monitoring
 
     var selectedApp: AppInfo? = null
-    var selectedPreset: String = "re_basic"
+    var selectedPreset: String = ""
 
     // ===== Polling =====
     private var pollingJob: Job? = null

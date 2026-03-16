@@ -89,6 +89,14 @@ a:hover { text-decoration: underline; }
 .tid-item .tid { color: var(--orange); width: 72px; }
 .tid-item .cnt { color: var(--text2); margin-left: auto; }
 .event-main { flex: 1; min-width: 0; }
+.row-focus { background: rgba(88,166,255,0.12); }
+.row-focus:hover { background: rgba(88,166,255,0.18); }
+.row-blink { animation: rowblink 0.6s ease-in-out 5; }
+@keyframes rowblink {
+  0% { background: rgba(255,255,255,0.02); }
+  50% { background: rgba(248,81,73,0.28); }
+  100% { background: rgba(255,255,255,0.02); }
+}
 
 /* Pagination */
 .pagination { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--bg2); border-top: 1px solid var(--border); font-size: 12px; color: var(--text2); flex-shrink: 0; }
@@ -173,6 +181,7 @@ a:hover { text-decoration: underline; }
     <div class="tab" :class="{ active: tab === 'pids' }" @click="tab = 'pids'; loadPids()">🔍 PID Analysis</div>
     <div class="tab" :class="{ active: tab === 'threads' }" @click="tab = 'threads'">🧵 Threads</div>
     <div class="tab" :class="{ active: tab === 'maps' }" @click="tab = 'maps'">🗺 Maps</div>
+    <div class="tab" :class="{ active: tab === 'strings' }" @click="tab = 'strings'; loadStrings()">🔤 Strings</div>
     <div class="tab" :class="{ active: tab === 'charts' }" @click="tab = 'charts'; renderCharts()">📊 Statistics</div>
     <div class="tab" :class="{ active: tab === 'timeline' }" @click="tab = 'timeline'">⏱ Timeline</div>
     <div class="tab" :class="{ active: tab === 'upload' }" @click="tab = 'upload'">📁 Import</div>
@@ -315,11 +324,13 @@ a:hover { text-decoration: underline; }
     <div class="search-bar">
       <input v-model.number="mapsPid" placeholder="PID (TGID)" style="width:140px" @keyup.enter="loadMaps()">
       <button @click="loadMaps()">Load</button>
+      <input v-model="mapsJumpAddr" placeholder="Jump addr (0x...)" style="width:160px" @keyup.enter="jumpToAddr()">
+      <button class="secondary" @click="jumpToAddr()">Jump</button>
       <input v-model="mapsFilterPath" placeholder="Path contains" style="width:160px" @keyup.enter="renderMaps()">
       <input v-model="mapsFilterPerm" placeholder="Perm (e.g. r-xp)" style="width:120px" @keyup.enter="renderMaps()">
-      <input v-model="mapsFilterAddr" placeholder="Addr (0x...)" style="width:140px" @keyup.enter="renderMaps()">
-      <button class="secondary" @click="mapsFilterPath=''; mapsFilterPerm=''; mapsFilterAddr=''; mapsFocusAddr=null; renderMaps()">Reset Filter</button>
-      <button class="secondary" @click="mapsPid=null; mapsText=''; mapsErr=''; mapsEntries=[]; mapsFocusAddr=null; renderMaps()">Reset</button>
+      <input v-model="mapsFilterAddr" placeholder="Filter addr (0x...)" style="width:160px" @keyup.enter="renderMaps()">
+      <button class="secondary" @click="mapsFilterPath=''; mapsFilterPerm=''; mapsFilterAddr=''; mapsSelectedStart=null; mapsFocusAddr=null; renderMaps()">Reset Filter</button>
+      <button class="secondary" @click="mapsPid=null; mapsText=''; mapsErr=''; mapsEntries=[]; mapsSelectedStart=null; mapsFocusAddr=null; renderMaps()">Reset</button>
     </div>
     <div class="panel">
       <div v-if="mapsErr" style="color:var(--red);white-space:pre-wrap;">{{ mapsErr }}</div>
@@ -341,7 +352,7 @@ a:hover { text-decoration: underline; }
 
       <div v-if="mapsEntries.length" class="chart-box">
         <h4>Mappings</h4>
-        <table class="event-table">
+        <table id="mapsMappingsTable" class="event-table">
           <thead>
             <tr>
               <th style="width:160px">Range</th>
@@ -352,7 +363,11 @@ a:hover { text-decoration: underline; }
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(m, i) in mapsEntries" :key="i" @click="mapsFocusAddr=m.start; renderMaps()">
+            <tr v-for="(m, i) in mapsEntries"
+                :key="i"
+                :data-map-start="m.start"
+                :class="{ 'row-focus': mapsSelectedStart === m.start, 'row-blink': mapsBlinkStart === m.start }"
+                @click="mapsFocusAddr=m.start; mapsSelectedStart=m.start; renderMaps()">
               <td class="mono">0x{{ m.startHex }}-0x{{ m.endHex }}</td>
               <td class="mono">{{ m.perm }}</td>
               <td class="mono">0x{{ m.offHex }}</td>
@@ -366,6 +381,46 @@ a:hover { text-decoration: underline; }
       </div>
 
       <div v-if="!mapsText && !mapsErr" class="loading">Enter PID (TGID) and load /proc/&lt;pid&gt;/maps.</div>
+    </div>
+  </template>
+
+  <!-- STRINGS TAB -->
+  <template v-if="tab === 'strings'">
+    <div class="search-bar">
+      <input class="query" v-model="stringsQ" placeholder="Filter strings (substring)..." @keyup.enter="loadStrings()">
+      <input v-model.number="stringsScan" placeholder="Scan last N events" style="width:160px" @keyup.enter="loadStrings()">
+      <input v-model.number="stringsMaxItems" placeholder="Max items" style="width:120px" @keyup.enter="loadStrings()">
+      <button @click="loadStrings()">Refresh</button>
+      <button class="secondary" @click="stringsQ=''; loadStrings()">Reset</button>
+      <span style="color:var(--text2);font-size:12px;align-self:center">
+        Unique: <span class="num">{{ stringsTotalUnique }}</span>
+      </span>
+    </div>
+    <div class="panel">
+      <div v-if="stringsLoading" class="loading">Loading…</div>
+      <div v-else>
+        <table class="event-table">
+          <thead>
+            <tr>
+              <th>String (len≥5)</th>
+              <th style="width:80px">Count</th>
+              <th style="width:90px">SampleIdx</th>
+              <th style="width:110px">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="it in stringsItems" :key="it.s">
+              <td class="args" style="white-space:pre-wrap;max-width:none" :title="it.s">{{ it.s }}</td>
+              <td class="nr">{{ it.count }}</td>
+              <td class="mono">{{ it.idx === null || it.idx === undefined ? '-' : it.idx }}</td>
+              <td>
+                <button class="secondary" @click="searchFromString(it.s)">Search</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-if="!stringsItems.length" class="loading">No strings.</div>
+      </div>
     </div>
   </template>
 
@@ -575,6 +630,19 @@ a:hover { text-decoration: underline; }
         <button class="secondary" @click="mapsPid=detailEvent.pid; mapsFocusAddr=(detailEvent.a0||null); tab='maps'; loadMaps()">Jump to Maps (a0)</button>
       </div>
 
+      <div class="detail-section" v-if="cloneResolved && cloneResolved.addrHex">
+        <h4>Clone Target</h4>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <button class="secondary" @click="refreshCloneResolved()">Refresh</button>
+          <button class="secondary" @click="mapsPid=detailEvent.pid; mapsJumpAddr=cloneResolved.addrHex; tab='maps'; jumpToAddr()">Jump to Maps</button>
+        </div>
+        <pre style="background:var(--bg);padding:10px;border-radius:4px;overflow-x:auto;white-space:pre-wrap;font-size:12px;color:var(--text);border:1px solid var(--border);">{{
+          cloneResolved.module
+            ? (cloneResolved.addrHex + ' → ' + cloneResolved.module + ' + ' + cloneResolved.offsetHex + (cloneResolved.path ? ('  ' + cloneResolved.path) : ''))
+            : (cloneResolved.addrHex + ' → unmapped')
+        }}</pre>
+      </div>
+
       <div class="detail-section" v-if="detailEvent.vma_info">
         <h4>VMA Info</h4>
         <pre style="background:var(--bg);padding:10px;border-radius:4px;font-size:12px;color:var(--cyan);border:1px solid var(--border);">{{ detailEvent.vma_info }}</pre>
@@ -624,19 +692,31 @@ createApp({
     const detailEvent = ref(null);
     const resolvedBacktrace = ref([]);
     const resolvingSymbols = ref(false);
+    const cloneResolved = ref(null);
 
     const mapsPid = ref(null);
     const mapsText = ref('');
     const mapsErr = ref('');
+    const mapsJumpAddr = ref('');
     const mapsFilterPath = ref('');
     const mapsFilterPerm = ref('');
     const mapsFilterAddr = ref('');
     const mapsFocusAddr = ref(null);
+    const mapsSelectedStart = ref(null);
+    const mapsBlinkStart = ref(null);
+    let mapsBlinkTimer = null;
     const mapsEntries = ref([]);
     const mapsCache = new Map();
     const symbolFiles = ref([]);
     const symbolCache = new Map();
     let mapsChart = null;
+
+    const stringsQ = ref('');
+    const stringsScan = ref(20000);
+    const stringsMaxItems = ref(2000);
+    const stringsItems = ref([]);
+    const stringsTotalUnique = ref(0);
+    const stringsLoading = ref(false);
 
     // PIDs
     const pids = ref([]);
@@ -776,11 +856,84 @@ createApp({
       if (data.ok) {
         mapsText.value = data.maps || '';
         mapsCache.set(mapsPid.value, parseMaps(mapsText.value));
+        mapsSelectedStart.value = null;
         renderMaps();
         loadSymbolList();
       } else {
         mapsErr.value = data.error || 'failed';
       }
+    }
+
+    function parseHexAddr(s) {
+      const t = String(s || '').trim().toLowerCase();
+      if (!t) return null;
+      const u = t.startsWith('0x') ? t.slice(2) : t;
+      const v = parseInt(u, 16);
+      if (Number.isNaN(v)) return null;
+      return v;
+    }
+
+    async function jumpToAddr() {
+      mapsErr.value = '';
+      const pid = mapsPid.value;
+      const addr = parseHexAddr(mapsJumpAddr.value);
+      if (!pid || addr === null) return;
+      if (!mapsText.value) {
+        await loadMaps();
+        if (!mapsText.value) return;
+      }
+      await ensureMapsForPid(pid);
+      const m = resolveAddrByMaps(pid, addr);
+      mapsFocusAddr.value = addr;
+      if (!m) {
+        mapsSelectedStart.value = null;
+        mapsErr.value = 'address not in any mapping: 0x' + addr.toString(16);
+        renderMaps();
+        return;
+      }
+      mapsSelectedStart.value = m.start;
+      mapsFilterPath.value = '';
+      mapsFilterPerm.value = '';
+      mapsFilterAddr.value = '';
+      renderMaps();
+      await nextTick();
+      try {
+        const table = document.getElementById('mapsMappingsTable');
+        const row = table ? table.querySelector(`tr[data-map-start="${m.start}"]`) : null;
+        if (row && row.scrollIntoView) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (_) {}
+      mapsBlinkStart.value = m.start;
+      if (mapsBlinkTimer) clearTimeout(mapsBlinkTimer);
+      mapsBlinkTimer = setTimeout(() => { mapsBlinkStart.value = null; }, 3000);
+    }
+
+    async function loadStrings() {
+      stringsLoading.value = true;
+      try {
+        const resp = await rpc('strings_summary', {
+          q: stringsQ.value || null,
+          min_len: 5,
+          max_items: stringsMaxItems.value || 2000,
+          max_scan: stringsScan.value || 20000,
+        });
+        const data = (resp && resp.ok) ? resp.data : { ok: false };
+        if (data && data.ok) {
+          stringsItems.value = data.items || [];
+          stringsTotalUnique.value = data.total_unique || 0;
+        } else {
+          stringsItems.value = [];
+          stringsTotalUnique.value = 0;
+        }
+      } finally {
+        stringsLoading.value = false;
+      }
+    }
+
+    function searchFromString(s) {
+      searchQuery.value = s;
+      searchOffset.value = 0;
+      tab.value = 'events';
+      doSearch();
     }
 
     function parseMaps(text) {
@@ -849,6 +1002,10 @@ createApp({
       mapsCache.set(pid, all);
       const filtered = filterMaps(all);
       mapsEntries.value = filtered;
+      if (mapsFocusAddr.value !== null && mapsSelectedStart.value === null) {
+        const mm = resolveAddrByMaps(pid, mapsFocusAddr.value);
+        if (mm) mapsSelectedStart.value = mm.start;
+      }
       renderMapsChart(all, filtered);
     }
 
@@ -935,6 +1092,30 @@ createApp({
       return null;
     }
 
+    async function refreshCloneResolved() {
+      const ev = detailEvent.value;
+      cloneResolved.value = null;
+      if (!ev || !ev.pid) return;
+      const addr = ev.clone_fn;
+      if (!addr || typeof addr !== 'number') return;
+      await ensureMapsForPid(ev.pid);
+      const m = resolveAddrByMaps(ev.pid, addr);
+      if (!m) {
+        cloneResolved.value = { addrHex: '0x' + addr.toString(16) };
+        return;
+      }
+      const baseName = (m.path || '[anon]').split('/').pop();
+      const off = addr - m.start;
+      cloneResolved.value = {
+        addrHex: '0x' + addr.toString(16),
+        module: baseName,
+        offsetHex: '0x' + off.toString(16),
+        path: m.path || '',
+        perm: m.perm,
+        suspicious: m.suspicious,
+      };
+    }
+
     async function refreshResolvedBacktrace() {
       const ev = detailEvent.value;
       resolvedBacktrace.value = [];
@@ -1019,10 +1200,12 @@ createApp({
     function showDetail(ev, idx) {
       detailEvent.value = ev;
       refreshResolvedBacktrace();
+      refreshCloneResolved();
       const name = (ev && ev.name) ? String(ev.name).toLowerCase() : '';
       if (name.includes('mmap') || name.includes('mprotect')) {
         mapsPid.value = ev.pid || null;
         mapsFocusAddr.value = ev.a0 || null;
+        mapsSelectedStart.value = null;
         tab.value = 'maps';
         loadMaps();
       }
@@ -1310,10 +1493,10 @@ createApp({
       tab, bridgeConnected, stats,
       events, searchQuery, searchPid, searchTid, searchComm, searchNr, searchAntidebug, searchHasRetval,
       searchOffset, searchLimit, searchResult,
-      detailEvent, resolvedBacktrace, resolvingSymbols,
+      detailEvent, resolvedBacktrace, resolvingSymbols, cloneResolved,
       doSearch, resetSearch, prevPage, nextPage, filterByPid, showDetail,
       syscallClass, syscallTag, parseBacktrace,
-      refreshResolvedBacktrace, resolveSymbolsForBacktrace,
+      refreshResolvedBacktrace, resolveSymbolsForBacktrace, refreshCloneResolved,
       pids, filteredPids, pidSearch, selectedPid, selectedPidComm, pidEvents, pidEventsOffset, pidEventsTotal,
       loadPids, filterPids, selectPid, loadPidEvents, openPidFromDetail,
       timelinePid, loadTimeline,
@@ -1321,9 +1504,11 @@ createApp({
       uploadStatus, uploadFile, handleDrop,
       exportJsonl, exportCsv, clearAll, stopApp, clearApp, clearAppHistory,
       threadPid, threadResult, loadThreads,
-      mapsPid, mapsText, mapsErr, mapsEntries, mapsFilterPath, mapsFilterPerm, mapsFilterAddr, mapsFocusAddr,
-      loadMaps, renderMaps,
+      mapsPid, mapsText, mapsErr, mapsEntries, mapsJumpAddr, mapsSelectedStart, mapsBlinkStart, mapsFilterPath, mapsFilterPerm, mapsFilterAddr, mapsFocusAddr,
+      loadMaps, jumpToAddr, renderMaps,
       symbolFiles, loadSymbolList, uploadSymbol,
+      stringsQ, stringsScan, stringsMaxItems, stringsItems, stringsTotalUnique, stringsLoading,
+      loadStrings, searchFromString,
     };
   }
 }).mount('#app');

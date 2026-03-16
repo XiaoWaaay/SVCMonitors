@@ -1,148 +1,157 @@
-# SVCMonitor v4.0
+# SVC Call / SVC Monitor
 
-**ARM64 SVC 系统调用监控工具** — KernelPatch Module (KPM) + Android APP 完整方案
+**ARM64 系统调用监控与逆向分析工具链** — KernelPatch Module (KPM) + Android App + PC Web Viewer
 
-适用平台: Google Pixel 6 (oriole) · Android 12 · Kernel 5.10.43 · KernelPatch v0.10.7 (a07)
+本仓库当前的主架构是：
+- Android App 负责采集/落库/解析（TID、调用链、fd/path、maps 等），并作为事件服务端对外推送增量事件
+- PC Viewer 作为客户端连接手机事件服务端，并提供 WebSocket-only 的 Web 分析界面（搜索、线程追踪、maps 可视化、符号解析等）
 
 ---
 
 ## 目录
 
-- [项目概述](#项目概述)
-- [架构设计](#架构设计)
+- [架构与数据流](#架构与数据流)
+- [快速开始（推荐链路）](#快速开始推荐链路)
+- [功能清单](#功能清单)
 - [目录结构](#目录结构)
-- [KPM 模块](#kpm-模块)
-  - [模块文件说明](#模块文件说明)
-  - [编译方法](#编译方法)
-  - [安装与加载](#安装与加载)
-  - [CTL0 命令接口](#ctl0-命令接口)
-  - [技术细节](#技术细节)
-- [Android APP](#android-app)
-  - [功能说明](#功能说明)
-  - [编译方法 (APP)](#编译方法-app)
-  - [使用方法](#使用方法)
-- [数据保存与日志](#数据保存与日志)
-- [版本历史](#版本历史)
+- [事件字段约定](#事件字段约定)
 - [故障排查](#故障排查)
-- [许可证](#许可证)
 
 ---
 
-## 项目概述
+## 架构与数据流
 
-SVCMonitor 是一套针对 ARM64 平台的 SVC (Supervisor Call) 系统调用监控工具,
-由内核模块 (KPM) 和 Android APP 两部分组成:
+```
+┌──────────────┐          ┌─────────────────────────┐
+│  Kernel (KPM) │          │      PC (Python)        │
+│  svc_monitor  │          │   SVC_PC_View/server     │
+│  syscall hook │          │  - connect app-socket    │
+└──────┬────────┘          │  - in-mem store + index  │
+       │                   │  - WebSocket-only UI     │
+       │ SuperCall ctl0    └───────┬─────────────────┘
+       ▼                           │ Socket.IO (websocket only)
+┌─────────────────────────┐        ▼
+│      Android App         │   ┌──────────────┐
+│  android/app (Kotlin)    │   │   Browser    │
+│  - KpmBridge ctl0        │   │  Web UI SPA  │
+│  - parse + Room DB       │   │  search/tid  │
+│  - fp_chain + maps       │   │  maps/symbol │
+│  - ServerSocket:8080     │   └──────────────┘
+└──────────┬──────────────┘
+           │ ADB forward tcp:8080 -> tcp:8080
+           ▼
+      PC 本机 127.0.0.1:8080
+```
 
-- **KPM 模块**: 运行在内核层,通过 Hook 系统调用入口,捕获指定进程的 SVC 调用事件
-- **Android APP**: 运行在用户层,通过 KernelPatch 的 SuperCall 协议与 KPM 通信,
-  提供图形化的包名选择、模式切换、事件查看和数据导出功能
-
-### 核心特性
-
-| 特性 | 说明 |
-|------|------|
-| **进程级监控** | 按 PID 过滤,只监控指定 APP 的系统调用 |
-| **双模式监控** | basic 模式(仅记录调用号) / detail 模式(记录参数和返回值) |
-| **实时事件查看** | APP 自动轮询拉取事件,实时展示 |
-| **双重日志保存** | 内核侧写入 /data/local/tmp/ 日志文件 + APP 侧 CSV 本地保存 |
-| **CSV 导出** | 一键导出到 Downloads/SVCMonitor/ 目录,方便后续分析 |
-| **动态 Hook 管理** | 支持运行时添加/删除 syscall hook |
-| **环形缓冲区** | 2048 槽位的内核环形缓冲区,零丢失高性能捕获 |
-| **符号运行时解析** | 通过 kallsyms_lookup_name 解析所有内核函数,无未导出符号依赖 |
+说明：
+- Web UI 与 PC Server 的交互强制使用 WebSocket（Socket.IO websocket transport），不做定时 AJAX 轮询拉事件。
+- App 服务端推送的是 **增量事件**（支持 HELLO last_seq），PC 端会持久化 last_seq，避免断线重连重复回放历史。
 
 ---
 
-## 架构设计
+## 快速开始（推荐链路）
 
+### 依赖
+
+- Android 设备：已安装 KernelPatch / kpatch（需要 root 权限）
+- PC：`adb`、`python3`
+- PC Viewer Python 依赖（必须包含 eventlet 才能 WebSocket-only）：
+
+```bash
+pip install -r SVC_PC_View/requirements.txt
 ```
-┌─────────────────────────────────────────────────┐
-│                 Android APP (v4.0)               │
-│  ┌───────────┐  ┌────────────┐  ┌─────────────┐ │
-│  │ MainActivity│  │MainViewModel│  │ LogExporter │ │
-│  │   (UI)     │  │ (Logic)    │  │ (CSV/Export) │ │
-│  └─────┬─────┘  └─────┬──────┘  └──────┬──────┘ │
-│        │               │                │        │
-│  ┌─────┴───────────────┴────────────────┘        │
-│  │           KpmBridge (SuperCall)                │
-│  └─────────────────┬─────────────────────────────┘
-│                    │
-│    /data/adb/kpatch <superkey> kpm ctl0 svc-monitor "<cmd>"
-│                    │
-├────────────────────┼─────────────────────────────┤
-│   Kernel Layer     │                              │
-│  ┌─────────────────▼──────────────────────┐      │
-│  │         KPM Module (svc-monitor)        │      │
-│  │  ┌──────────┐  ┌────────────────────┐  │      │
-│  │  │ main.c   │  │  hook_engine.c     │  │      │
-│  │  │(CTL0调度) │  │  (syscall hooks)   │  │      │
-│  │  └────┬─────┘  └────────┬───────────┘  │      │
-│  │       │                  │              │      │
-│  │  ┌────▼──────────────────▼───────────┐  │      │
-│  │  │         event_ring.c              │  │      │
-│  │  │    (2048 slot ring buffer)        │  │      │
-│  │  └──────────────┬────────────────────┘  │      │
-│  │                 │                       │      │
-│  │  ┌──────────────▼──────────┐            │      │
-│  │  │     file_logger.c       │            │      │
-│  │  │ (/data/local/tmp/*.log) │            │      │
-│  │  └─────────────────────────┘            │      │
-│  │  ┌──────────────┐  ┌─────────────────┐  │      │
-│  │  │ symbols.c    │  │response_builder │  │      │
-│  │  │(runtime解析)  │  │   (JSON构建)    │  │      │
-│  │  └──────────────┘  └─────────────────┘  │      │
-│  └─────────────────────────────────────────┘      │
-└───────────────────────────────────────────────────┘
+
+### 1）安装/运行 Android App
+
+```bash
+cd android
+/tmp/gradle-8.1.1/bin/gradle :app:assembleDebug
 ```
+
+安装 APK：
+
+```bash
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+打开 App 后：
+- 配置 SuperKey（用于 kpatch supercall）
+- 一键启用监控（或选择预设/NR）
+- 打开 “App 服务端 (PC 用 adb forward 连接)”（默认端口 8080）
+
+### 2）启动 PC Viewer（一条命令）
+
+```bash
+bash SVC_PC_View/run_app_socket.sh 8080 0
+```
+
+- `8080`：App ServerSocket 端口
+- `0`：Web UI 自动选择空闲端口（避免 5000/5001 被占用）
+
+终端会打印 Web UI 地址，例如 `http://localhost:5001`。
+
+---
+
+## 功能清单
+
+- **事件流**：App -> PC -> Web 全链路增量推送
+- **全量搜索/过滤**：关键字、PID(TGID)、TID、NR、进程名等
+- **线程对话式追踪**：左侧 TID 列表，勾选后仅展示该线程执行流
+- **颜色标签**：PROC / NET / FILE / ENV syscall 分类高亮
+- **线程分析**：线程统计与线程树（clone/clone3）
+- **Maps Analyzer**：
+  - 解析 `/proc/<pid>/maps` 为结构化 mapping
+  - 地址空间可视化（按权限 r/w/x 着色）
+  - 可疑区域高亮（匿名 RWX、非标准 so 路径）
+  - 支持路径/权限/地址过滤
+  - 与 mmap/mprotect 事件联动定位
+- **Backtrace 符号解析**：
+  - maps 级别：`0xADDR -> libfoo.so + 0xOFF`
+  - 可选：上传 so/symbol 后用 `addr2line/llvm-addr2line` 解析函数名
+- **导出**：JSONL/CSV（下载/上传属于文件传输接口，不是事件轮询）
 
 ---
 
 ## 目录结构
 
 ```
-SVCMonitor_v4/
-├── README.md                          ← 本文件
-├── kpm/                               ← KPM 内核模块
-│   ├── Makefile                       ← 编译脚本 (gcc -r 链接)
-│   ├── svc-hello.c                    ← 最小测试模块
-│   └── src/
-│       ├── include/
-│       │   └── svc_monitor.h          ← 核心头文件 (类型/宏/函数指针)
-│       ├── symbols.c                  ← ★ 运行时符号解析 (kallsyms_lookup_name)
-│       ├── main.c                     ← KPM 入口 + CTL0 命令分发
-│       ├── hook_engine.c              ← syscall Hook 安装/卸载
-│       ├── event_ring.c              ← 环形缓冲区 (2048 slots)
-│       ├── file_logger.c             ← 内核侧文件日志
-│       ├── pkg_cache.c               ← UID→包名 缓存 (64 条目)
-│       └── response_builder.c        ← JSON 响应构建器
-│
-└── app/                               ← Android APP 项目
-    ├── build.gradle.kts               ← 根 Gradle 配置
-    ├── settings.gradle.kts
-    ├── gradle.properties
-    ├── gradle/wrapper/
-    │   └── gradle-wrapper.properties
-    └── app/
-        ├── build.gradle.kts           ← APP Gradle 配置 (v4.0.0)
-        ├── proguard-rules.pro
-        └── src/main/
-            ├── AndroidManifest.xml
-            ├── java/com/svcmonitor/app/
-            │   ├── core/
-            │   │   ├── KpmBridge.kt       ← ★ KPM 通信桥接 (SuperCall)
-            │   │   ├── StatusParser.kt    ← JSON 解析 (org.json)
-            │   │   ├── AppResolver.kt     ← APP 包名→PID 解析
-            │   │   └── LogExporter.kt     ← ★ CSV 日志保存/导出
-            │   └── ui/
-            │       ├── MainActivity.kt    ← 主界面
-            │       └── MainViewModel.kt   ← 业务逻辑 ViewModel
-            └── res/
-                ├── layout/
-                │   └── activity_main.xml  ← 主界面布局
-                └── values/
-                    ├── colors.xml
-                    ├── strings.xml
-                    └── themes.xml
+SVC_Call/
+├── README.md
+├── kpm/                       # KernelPatch Module: svc_monitor
+├── android/                   # Android App (Kotlin)
+└── SVC_PC_View/               # PC Web Viewer (Python + SPA)
+    ├── requirements.txt
+    ├── run_app_socket.sh      # 一键启动：adb forward + server/app.py
+    ├── server/app.py          # Flask-SocketIO 后端（WebSocket-only + app-socket client）
+    └── static/index.html      # Web 前端（Vue3 + ECharts + Socket.IO）
 ```
+
+---
+
+## 事件字段约定
+
+为支持线程分析与跨端一致性，事件里关键字段含义如下：
+
+- `tgid`：进程号（线程组号）
+- `pid`：线程号（TID）
+- PC Viewer 会做兼容归一化：`pid <- tgid`，`tid <- pid`，避免旧界面只识别 pid 的问题
+- `fp_chain`：解析后的 FP 调用链（含 so 名与偏移），会用于搜索与详情展示
+
+---
+
+## 故障排查
+
+- Web UI 打不开或提示 transport=polling：
+  - 确认安装了 `eventlet`：`pip install -r SVC_PC_View/requirements.txt`
+- Web UI 端口占用：
+  - 使用脚本的第二个参数 `0` 自动选端口：`run_app_socket.sh 8080 0`
+- App 服务端连不上：
+  - 确认 USB 连接、`adb devices` 正常
+  - 确认执行了 `adb forward tcp:8080 tcp:8080`（脚本会自动做）
+- maps 读取失败：
+  - 需要 root；PC 端会尝试 `adb shell cat`，失败会 fallback `adb shell su -c cat`
+- so 函数名解析失败：
+  - 需要上传带符号的 so/symbol 文件，并且 PC 需要 `llvm-addr2line` 或 `addr2line`
 
 ---
 
@@ -176,7 +185,7 @@ git clone https://github.com/bmax121/KernelPatch.git
 **编译:**
 
 ```bash
-cd SVCMonitor_v4/kpm
+cd kpm
 
 # 设置 KernelPatch 源码路径
 export KP_DIR=/path/to/KernelPatch
@@ -218,37 +227,40 @@ make verify
 
 ```bash
 # 1. 将 KPM 文件推送到设备
-adb push svc-monitor.kpm /data/local/tmp/
+adb push kpm/svc_monitor.kpm /data/local/tmp/
 
 # 2. 加载模块 (需要 SuperKey)
-adb shell su -c '/data/adb/kpatch <YOUR_SUPERKEY> kpm load /data/local/tmp/svc-monitor.kpm'
+adb shell su -c '/data/adb/kpatch <YOUR_SUPERKEY> kpm load /data/local/tmp/svc_monitor.kpm'
 
 # 3. 验证加载成功
 adb shell su -c '/data/adb/kpatch <YOUR_SUPERKEY> kpm list'
-# 应看到: svc-monitor  3.1.0  running
+# 应看到: svc_monitor  ...  running
 
 # 4. 测试 CTL0 通信
-adb shell su -c '/data/adb/kpatch <YOUR_SUPERKEY> kpm ctl0 svc-monitor "status"'
-# 应返回 JSON: {"running":0,"mode":"basic",...}
+adb shell su -c '/data/adb/kpatch <YOUR_SUPERKEY> kpm ctl0 svc_monitor "status"'
 
 # 5. 卸载模块 (如需)
-adb shell su -c '/data/adb/kpatch <YOUR_SUPERKEY> kpm unload svc-monitor'
+adb shell su -c '/data/adb/kpatch <YOUR_SUPERKEY> kpm unload svc_monitor'
 ```
 
 ### CTL0 命令接口
 
-通过 `kpatch <KEY> kpm ctl0 svc-monitor "<command>"` 与模块通信:
+通过 `kpatch <KEY> kpm ctl0 svc_monitor "<command>"` 与模块通信（App 内部同样使用这套接口）:
 
 | 命令 | 说明 | 示例响应 |
 |------|------|----------|
-| `start` | 开始监控 | `{"ok":"monitoring started"}` |
-| `stop` | 停止监控 | `{"ok":"monitoring stopped"}` |
-| `status` | 查询状态 | `{"running":1,"mode":"basic","hooks":15,"pids":2,...}` |
-| `pid add <pid>` | 添加监控 PID | `{"ok":"pid added"}` |
-| `pid del <pid>` | 删除监控 PID | `{"ok":"pid removed"}` |
-| `pid clear` | 清除所有 PID | `{"ok":"all pids cleared"}` |
-| `pkg add <uid> <name>` | 注册包名映射 | `{"ok":"package registered"}` |
-| `mode basic` | 切换为基础模式 | `{"ok":"mode set to basic"}` |
+| `enable` | 开始监控（开启回调） | `{"ok":true,...}` |
+| `disable` | 停止监控（关闭回调） | `{"ok":true,...}` |
+| `status` | 查询状态/已选 NR/UID 等 | `{"enabled":1,"nr_count":...}` |
+| `uid <uid>` | 设置目标 UID（-1 表示全部） | `{"ok":true,...}` |
+| `preset <name>` | 应用预设规则集 | `{"ok":true,...}` |
+| `set_nrs 56,57,...` | 设置 NR 列表 | `{"ok":true,...}` |
+| `enable_nr <nr>` | 单独开启某个 NR | `{"ok":true,...}` |
+| `disable_nr <nr>` | 单独关闭某个 NR | `{"ok":true,...}` |
+| `enable_all` | 开启全部已 hook NR | `{"ok":true,...}` |
+| `disable_all` | 关闭全部已 hook NR | `{"ok":true,...}` |
+| `tier2 on/off` | Tier2 扩展开关 | `{"ok":true,...}` |
+| `clear` | 清空内核事件缓存 | `{"ok":true,...}` |
 | `mode detail` | 切换为详细模式 | `{"ok":"mode set to detail"}` |
 | `events [count]` | 获取事件 (默认50) | `[{"ts":...,"pid":...,"nr":...},...]` |
 | `hooks list` | 列出已安装 Hook | `[{"nr":56,"name":"openat","nargs":4},...]` |
@@ -318,219 +330,33 @@ int svc_resolve_symbols(void) {
 
 ---
 
-## Android APP
+## Android App
 
-### 功能说明
+Android App 位于 [android](file:///Users/bytedance/Desktop/GithubProject/SVC_Call/android)：
 
-| 功能模块 | 说明 |
-|----------|------|
-| **SuperKey 连接** | 4 步验证: 定位 kpatch → 验证 Key → 检查模块 → 测试通信 |
-| **包名选择** | 列出设备已安装 APP,自动解析 PID,添加到监控列表 |
-| **模式切换** | basic (基础) / detail (详细) 两种监控模式 |
-| **实时事件** | 自动 2s 轮询,展示 SVC 调用事件 (syscall 名称、PID、时间戳) |
-| **CSV 导出** | 事件保存为 CSV 文件,一键导出到 Downloads/SVCMonitor/ |
-| **KPM 日志拉取** | 从设备 /data/local/tmp/ 拉取内核侧日志 |
-| **Hook 管理** | 查看已安装 Hook,动态添加/删除 |
+- 通过 `KpmBridge` 控制 KPM：`/data/adb/kpatch <KEY> kpm ctl0 svc_monitor "<cmd>"`
+- 负责事件采集与解析：`tgid/pid(tid)`、`fp_chain`、线程树、fd/path、maps 等
+- 事件落库（Room），并提供 App 服务端（ServerSocket，默认 8080）供 PC Viewer 连接
 
-### APP 核心文件说明
-
-| 文件 | 功能 |
-|------|------|
-| `KpmBridge.kt` | KPM 通信核心 — 执行 shell 命令调用 kpatch, 全路径 `/data/adb/kpatch` |
-| `StatusParser.kt` | JSON 解析 — 使用 Android 内置 `org.json`, 兼容纯数组和包装格式 |
-| `AppResolver.kt` | 包名→PID — 使用 `pidof` / `ps -e` 获取进程 ID |
-| `LogExporter.kt` | 日志管理 — CSV 本地保存 + Downloads 导出 + KPM 日志拉取 |
-| `MainViewModel.kt` | 业务逻辑 — 连接、监控、事件获取、日志导出的完整流程 |
-| `MainActivity.kt` | 主界面 — Material Design, 5 个功能卡片 |
-
-### 编译方法 (APP)
-
-**前置条件:**
-
-- Android Studio (Arctic Fox 或更新版本)
-- SDK 33+ (compileSdk)
-- minSdk 26 (Android 8.0+)
-
-**编译步骤:**
-
-```bash
-cd SVCMonitor_v4/app
-
-# 用 Android Studio 打开项目
-# 或使用命令行:
-./gradlew assembleDebug
-
-# 输出 APK: app/build/outputs/apk/debug/app-debug.apk
-```
-
-**无外部依赖**:
-- 使用 Android 内置 `org.json` (无需 Gson)
-- 使用标准 AndroidX 库 (Material, Lifecycle, Coroutines)
-- 使用 `Runtime.exec()` 执行 root shell 命令 (无需 libsu)
-
-### 使用方法
-
-#### 1. 安装与首次连接
-
-```
-1. 确保 KernelPatch 已安装且模块已加载
-2. 安装 APK: adb install svc-monitor-v4.apk
-3. 打开 APP
-4. 在 SuperKey 输入框中输入你的 KernelPatch SuperKey
-5. 点击 "Connect"
-6. 连接成功后会显示 "Connected (KP: x.x.x)"
-```
-
-#### 2. 选择监控目标
-
-```
-1. 在 "Package Filter" 区域,系统会列出已安装的 APP
-2. 选择要监控的 APP (如: com.example.app)
-3. APP 自动使用 pidof 获取进程 PID
-4. 点击 "Add" 将 PID 加入监控列表
-5. 如果目标 APP 重启,点击 "Refresh PIDs" 更新
-```
-
-#### 3. 开始监控
-
-```
-1. 选择监控模式: Basic (仅 syscall 号) 或 Detail (含参数)
-2. 点击 "Start" 开始监控
-3. Events 区域会实时显示捕获的 SVC 调用
-4. 点击 "Stop" 停止监控
-```
-
-#### 4. 日志与导出
-
-```
-1. 点击 "Export CSV" — 将本地缓存的事件导出为 CSV 文件到 Downloads/SVCMonitor/
-2. 点击 "Pull KPM Log" — 从设备拉取内核侧日志
-3. 点击 "Clear Logs" — 清除 APP 本地日志缓存
-```
+关键文件：
+- [KpmBridge.kt](file:///Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/java/com/svcmonitor/app/KpmBridge.kt)
+- [MainViewModel.kt](file:///Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/java/com/svcmonitor/app/MainViewModel.kt)
+- [MainActivity.kt](file:///Users/bytedance/Desktop/GithubProject/SVC_Call/android/app/src/main/java/com/svcmonitor/app/MainActivity.kt)
 
 ---
 
-## 数据保存与日志
+## PC Web Viewer
 
-SVCMonitor 提供 **双重日志保存机制**:
+PC Viewer 位于 [SVC_PC_View](file:///Users/bytedance/Desktop/GithubProject/SVC_Call/SVC_PC_View)：
 
-### 1. 内核侧日志 (file_logger.c)
+- Python 后端：`server/app.py`（WebSocket-only + app-socket client + in-memory 索引）
+- Web 前端：`static/index.html`（搜索、线程追踪、Maps Analyzer、符号解析）
 
-- **路径**: `/data/local/tmp/svc_monitor_0.log`, `..._1.log`, `..._2.log`, ...
-- **格式**: 管道 `|` 分隔的文本
-- **字段**: `timestamp|pid|uid|syscall_nr|syscall_name|arg0|arg1|...|ret`
-- **自动轮转**: 单文件 4MB 上限,自动创建新文件
-- **启用方式**: CTL0 命令 `log on` 或 APP 中启用
-
-```
-# 示例日志行 (管道分隔):
-1709012345678|1234|10150|56|openat|0xFFFFFF9C|0x7FFC8A00|0x0|0x0|0x0|0x0|3
-1709012345679|1234|10150|63|read|3|0x7FFC8000|4096|0x0|0x0|0x0|1024
-```
-
-### 2. APP 侧 CSV 日志 (LogExporter.kt)
-
-- **本地路径**: `/data/data/com.svcmonitor.app/files/svc_logs/events_YYYYMMDD.csv`
-- **导出路径**: `/sdcard/Downloads/SVCMonitor/svc_events_export_YYYYMMDD_HHmmss.csv`
-- **格式**: 标准 CSV (逗号分隔)
-- **字段**: `timestamp,pid,uid,syscall_nr,syscall_name,args,return_value`
-- **自动轮转**: 单文件 10MB 上限
-
-```csv
-# 导出的 CSV 示例:
-timestamp,pid,uid,syscall_nr,syscall_name,args,return_value
-1709012345678,1234,10150,56,openat,"0xFFFFFF9C,0x7FFC8A00,0x0,0x0",3
-1709012345679,1234,10150,63,read,"3,0x7FFC8000,4096",1024
-```
-
----
-
-## 版本历史
-
-| 版本 | 变更 |
-|------|------|
-| **v4.0** | 完全重写 APP — 修复连接失败, 添加 CSV 日志导出, 移除 Gson 依赖 |
-| **v3.1** | 修复 6 个未导出符号错误 — 添加 `symbols.c` 运行时解析 |
-| **v3.0** | 修复 Makefile (gcc -r), ELF 格式正确, 模块首次成功加载 |
-| **v2.1** | 修复 API 调用错误 |
-| **v2.0** | 首个完整版本 (KPM + APP) |
-| **v1.0** | 原型版本 |
-
-### v4.0 修复的 APP 问题
-
-1. **kpatch 路径错误**: 旧代码使用 `kpatch` (裸命令), 改为 `/data/adb/kpatch` (完整路径)
-2. **SuperKey 验证错误**: 旧代码 `kpatch <key> hello` (无效命令), 改为 `kpatch <key> -v`
-3. **模块检测错误**: 旧代码发送 "help" 检测, 改为 `kpatch <key> kpm list` 检查 "svc-monitor"
-4. **JSON 格式不匹配**: 旧代码只支持 `{"events":[...]}`, 新代码同时支持纯数组 `[...]`
-5. **移除 Gson 依赖**: 全部改用 Android 内置 `org.json`
-6. **新增 CSV 导出**: `LogExporter.kt` 支持本地保存和导出到 Downloads
-
----
-
-## 故障排查
-
-### 模块加载失败
-
-```bash
-# 检查 kpatch 是否存在
-adb shell ls -la /data/adb/kpatch
-
-# 检查 KP 版本
-adb shell su -c '/data/adb/kpatch <KEY> -v'
-
-# 验证 KPM 文件格式
-readelf -h svc-monitor.kpm
-# 必须是: Type = REL, Machine = AArch64
-
-# 检查 KPM sections
-readelf -S svc-monitor.kpm | grep kpm
-# 必须有: .kpm.init .kpm.exit .kpm.ctl0 .kpm.name 等
-
-# 查看内核日志
-adb shell dmesg | grep -i "svc\|kpm\|kpatch"
-```
-
-### APP 连接失败
-
-```bash
-# 1. 确认 kpatch 路径
-adb shell which kpatch
-adb shell ls /data/adb/kpatch
-
-# 2. 确认 SuperKey 正确
-adb shell su -c '/data/adb/kpatch <KEY> -v'
-# 应返回版本号如: 0.10.7
-
-# 3. 确认模块已加载
-adb shell su -c '/data/adb/kpatch <KEY> kpm list'
-# 应看到: svc-monitor
-
-# 4. 手动测试 CTL0
-adb shell su -c '/data/adb/kpatch <KEY> kpm ctl0 svc-monitor "status"'
-# 应返回 JSON 状态
-
-# 5. 确认 APP 有 root 权限
-# 某些 root 方案需要在 root 管理器中授权 APP
-```
-
-### 常见错误
-
-| 错误 | 原因 | 解决 |
-|------|------|------|
-| "kpatch not found" | kpatch 二进制不在预期路径 | 确认 KernelPatch 已正确安装 |
-| "Invalid SuperKey" | SuperKey 错误 | 检查输入的 SuperKey 是否正确 |
-| "Module not loaded" | KPM 未加载 | 执行 `kpatch <key> kpm load /path/to/svc-monitor.kpm` |
-| "Module not responding" | CTL0 通信失败 | 查看 dmesg 日志, 可能模块初始化失败 |
-| "unknown symbol" (dmesg) | KP 版本不匹配 | 确认使用 KP v0.10.7, 运行 `make verify` 检查 |
-| No events after start | 未添加 PID 或目标进程无活动 | 确认已添加正确的 PID, 操作目标 APP |
+更完整的 PC Viewer 使用说明见：
+- [SVC_PC_View/README.md](file:///Users/bytedance/Desktop/GithubProject/SVC_Call/SVC_PC_View/README.md)
 
 ---
 
 ## 许可证
 
-GPL v2 — 与 KernelPatch 保持一致
-
----
-
-*SVCMonitor v4.0 — ARM64 SVC System Call Monitor*
-*适用于安全研究和隐私分析*
+GPL v2（与 KernelPatch 生态保持一致）

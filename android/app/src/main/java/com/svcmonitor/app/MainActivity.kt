@@ -83,6 +83,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var switchDoFilpOpen: Switch
     private val nrNameViews = HashMap<Int, TextView>()
     private lateinit var filterListContainer: LinearLayout
+    private lateinit var etAllNrFilter: EditText
+    private lateinit var llAllNrList: LinearLayout
     private var hookedNrSet: Set<Int> = emptySet()
     private var currentNrList: List<Int> = emptyList()
     private var lastEventsAll: List<StatusParser.SvcEvent> = emptyList()
@@ -106,7 +108,7 @@ class MainActivity : AppCompatActivity() {
     private var pcServerJob: kotlinx.coroutines.Job? = null
     private var pcServerSocket: java.net.ServerSocket? = null
     private val pcServerClients = ArrayList<java.io.BufferedWriter>(4)
-    private var pcServerBacklogLimit = 5000
+    private var pcServerBacklogLimit = 20000
 
     private data class SensitiveRule(val needle: String, val color: Int)
     private val sensitiveRules by lazy {
@@ -150,7 +152,7 @@ class MainActivity : AppCompatActivity() {
 
         hideSystemApps = prefs.getBoolean("hide_system_apps", false)
         onlyLaunchableApps = prefs.getBoolean("only_launchable_apps", false)
-        vm.doFilpOpenEnabled = prefs.getBoolean("do_filp_open", true)
+        vm.doFilpOpenEnabled = prefs.getBoolean("do_filp_open", false)
         historyLastSeq = prefs.getLong("history_last_seq", 0L)
         appList = loadVisibleApps(appSearchQuery)
 
@@ -365,7 +367,7 @@ class MainActivity : AppCompatActivity() {
             addView(makeLabel("额外 Hook"))
             switchDoFilpOpen = Switch(this@MainActivity).apply {
                 text = "开启 do_filp_open（更底层 open 路径）"
-                isChecked = prefs.getBoolean("do_filp_open", true)
+                isChecked = prefs.getBoolean("do_filp_open", false)
                 setOnCheckedChangeListener { _, checked ->
                     prefs.edit().putBoolean("do_filp_open", checked).apply()
                     vm.setDoFilpOpen(checked)
@@ -638,8 +640,91 @@ class MainActivity : AppCompatActivity() {
             addView(filterListContainer)
         })
 
+        col.addView(makeCard {
+            addView(makeLabel("全部 ARM64 SVC 号 (0-459)"))
+
+            etAllNrFilter = EditText(this@MainActivity).apply {
+                hint = "筛选：nr / name（支持子串）"
+                setTextColor(cText)
+                setHintTextColor(cSecondary)
+            }
+            addView(etAllNrFilter)
+
+            llAllNrList = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(8), 0, 0)
+            }
+            addView(llAllNrList)
+
+            etAllNrFilter.addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    renderAllNrList(s?.toString() ?: "")
+                }
+            })
+        })
+
         sv.addView(col)
         return sv
+    }
+
+    private fun renderAllNrList(query: String) {
+        if (!this::llAllNrList.isInitialized) return
+        llAllNrList.removeAllViews()
+        val q = query.trim().lowercase()
+        val selected = currentNrList.toHashSet()
+        var shown = 0
+        for (nr in 0..459) {
+            val name = StatusParser.nrToName(nr)
+            if (q.isNotEmpty()) {
+                val hit = nr.toString().contains(q) || name.lowercase().contains(q)
+                if (!hit) continue
+            }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(2), 0, dp(2))
+            }
+            row.addView(TextView(this).apply {
+                text = nr.toString()
+                typeface = Typeface.MONOSPACE
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTextColor(cSecondary)
+                minWidth = dp(48)
+            })
+            row.addView(TextView(this).apply {
+                text = name
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setTextColor(if (selected.contains(nr)) cGreen else cText)
+                typeface = if (selected.contains(nr)) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            row.addView(Button(this).apply {
+                text = "+"
+                setOnClickListener { vm.addNr(nr) }
+            })
+            row.addView(Button(this).apply {
+                text = "-"
+                setOnClickListener { vm.removeNr(nr) }
+            })
+            llAllNrList.addView(row)
+            shown++
+            if (shown >= 200) break
+        }
+        if (shown == 0) {
+            llAllNrList.addView(TextView(this).apply {
+                text = "无匹配项"
+                setTextColor(cSecondary)
+                setPadding(0, dp(4), 0, dp(4))
+            })
+        } else if (shown >= 200) {
+            llAllNrList.addView(TextView(this).apply {
+                text = "仅显示前 200 项，继续输入筛选缩小范围"
+                setTextColor(cSecondary)
+                setPadding(0, dp(6), 0, 0)
+            })
+        }
     }
 
     /* ══════════════════════════════════════════════════════════════
@@ -1089,6 +1174,7 @@ class MainActivity : AppCompatActivity() {
                 switchTier2.isChecked = s.tier2
                 refreshNrHighlights(s.nrList)
                 renderFilterList(s.hooks)
+                renderAllNrList(etAllNrFilter.text?.toString() ?: "")
             }
         }
 
@@ -1542,21 +1628,30 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun sendPcServerBacklog(w: java.io.BufferedWriter, afterSeq: Long) {
         val dao = SvcEventDb.get(applicationContext).dao()
-        val list = try {
-            if (afterSeq > 0L) {
-                dao.afterSeq(afterSeq, pcServerBacklogLimit)
-            } else {
-                dao.latest(pcServerBacklogLimit).asReversed()
-            }
-        } catch (_: Exception) {
-            emptyList()
-        }
-        if (list.isEmpty()) return
         try {
-            for (e in list) {
-                w.write(entityToJsonLine(e))
+            if (afterSeq > 0L) {
+                var cursor = afterSeq
+                var sent = 0
+                while (sent < pcServerBacklogLimit) {
+                    val chunkLimit = minOf(2000, pcServerBacklogLimit - sent)
+                    val chunk = try { dao.afterSeq(cursor, chunkLimit) } catch (_: Exception) { emptyList() }
+                    if (chunk.isEmpty()) break
+                    for (e in chunk) {
+                        w.write(entityToJsonLine(e))
+                        cursor = e.seq
+                    }
+                    w.flush()
+                    sent += chunk.size
+                    if (chunk.size < chunkLimit) break
+                }
+            } else {
+                val list = try { dao.latest(pcServerBacklogLimit).asReversed() } catch (_: Exception) { emptyList() }
+                if (list.isEmpty()) return
+                for (e in list) {
+                    w.write(entityToJsonLine(e))
+                }
+                w.flush()
             }
-            w.flush()
         } catch (_: Exception) {
         }
     }
@@ -2314,6 +2409,7 @@ class MainActivity : AppCompatActivity() {
                 filterListContainer.addView(row)
             }
         }
+        renderAllNrList(etAllNrFilter.text?.toString() ?: "")
     }
 
     private fun renderSelectedNrs(nrs: List<Int>) {

@@ -384,6 +384,62 @@ class EventStore:
                 "last_time": None,
             }
 
+    def strings_summary(self, query=None, min_len=5, max_items=2000, max_scan=20000):
+        def extract_runs(s):
+            out = []
+            run = []
+            for ch in s:
+                o = ord(ch)
+                if 0x20 <= o < 0x7f:
+                    run.append(ch)
+                else:
+                    if len(run) >= min_len:
+                        t = "".join(run).strip()
+                        if len(t) >= min_len:
+                            out.append(t)
+                    run = []
+            if len(run) >= min_len:
+                t = "".join(run).strip()
+                if len(t) >= min_len:
+                    out.append(t)
+            return out
+
+        q = (query or "").lower().strip()
+        counts = defaultdict(int)
+        sample = {}
+
+        with self.lock:
+            n = len(self.events)
+            if max_scan is None or max_scan <= 0 or max_scan > n:
+                start = 0
+            else:
+                start = n - max_scan
+
+            for idx in range(start, n):
+                ev = self.events[idx]
+                texts = []
+                for k in ("args", "desc", "fp_chain", "vma_info", "path"):
+                    v = ev.get(k)
+                    if isinstance(v, str) and v:
+                        texts.append(v)
+
+                for t in texts:
+                    if q and q not in t.lower():
+                        continue
+                    runs = extract_runs(t)
+                    for s in runs:
+                        if q and q not in s.lower():
+                            continue
+                        counts[s] += 1
+                        if s not in sample:
+                            sample[s] = idx
+
+        items = [{"s": s, "count": c, "idx": sample.get(s)} for s, c in counts.items()]
+        items.sort(key=lambda x: (-x["count"], x["s"]))
+        if max_items and max_items > 0:
+            items = items[:max_items]
+        return {"ok": True, "total_unique": len(counts), "items": items}
+
 
 store = EventStore()
 
@@ -819,6 +875,16 @@ def rpc_call(msg):
             if isinstance(resp, tuple):
                 resp = resp[0]
             emit("rpc_result", {"id": rid, "ok": True, "data": resp.get_json()})
+            return
+
+        if method == "strings_summary":
+            res = store.strings_summary(
+                query=params.get("q"),
+                min_len=int(params.get("min_len", 5) or 5),
+                max_items=int(params.get("max_items", 2000) or 2000),
+                max_scan=int(params.get("max_scan", 20000) or 20000),
+            )
+            emit("rpc_result", {"id": rid, "ok": True, "data": res})
             return
 
         if method == "symbol_list":

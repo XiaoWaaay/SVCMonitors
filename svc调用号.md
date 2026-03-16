@@ -97,7 +97,7 @@ const syscalls = [
     [95, "waitid", 0x5f, "int which", "pid_t pid", "struct siginfo *infop", "int options", "struct rusage *r"],
     [96, "set_tid_address", 0x60, "int *tidptr"],
     [97, "unshare", 0x61, "unsigned long unshare_flags"],
-    [98, "futex", 0x62, "u32 *uaddr", "int op", "u32 val", "struct __kernel_timespec *utime", "u32 *uaddr2", "u32 val3["],
+    [98, "futex", 0x62, "u32 *uaddr", "int op", "u32 val", "struct __kernel_timespec *utime", "u32 *uaddr2", "u32 val3["],]
     [99, "set_robust_list", 0x63, "struct robust_list_head *head", "size_t len", "-", "-"],
     [100, "get_robust_list", 0x64, "int pid", "struct robust_list_head * *head_ptr", "size_t *len_ptr", "-", "-", "-"],
     [101, "nanosleep", 0x65, "struct __kernel_timespec *rqtp", "struct __kernel_timespec *rmtp", "-", "-", "-", "-"],

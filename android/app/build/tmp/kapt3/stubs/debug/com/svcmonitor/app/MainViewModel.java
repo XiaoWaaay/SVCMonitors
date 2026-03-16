@@ -32,7 +32,7 @@ public final class MainViewModel extends androidx.lifecycle.ViewModel {
     @org.jetbrains.annotations.NotNull
     private final java.util.List<com.svcmonitor.app.StatusParser.SvcEvent> eventBuffer = null;
     private final int maxEvents = 120;
-    private boolean doFilpOpenEnabled = true;
+    private boolean doFilpOpenEnabled = false;
     @org.jetbrains.annotations.NotNull
     private final androidx.lifecycle.MutableLiveData<java.lang.Integer> _eventCount = null;
     @org.jetbrains.annotations.NotNull
@@ -48,7 +48,7 @@ public final class MainViewModel extends androidx.lifecycle.ViewModel {
     @org.jetbrains.annotations.Nullable
     private com.svcmonitor.app.AppInfo selectedApp;
     @org.jetbrains.annotations.NotNull
-    private java.lang.String selectedPreset = "re_basic";
+    private java.lang.String selectedPreset = "";
     @org.jetbrains.annotations.Nullable
     private kotlinx.coroutines.Job pollingJob;
     private boolean pollingPaused = false;

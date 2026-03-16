@@ -95,6 +95,7 @@ object StatusParser {
                     ))
                 }
             }
+            updateDynamicNrNames(hooks)
 
             ModuleStatus(
                 ok = true,
@@ -323,6 +324,8 @@ object StatusParser {
         ))
     )
 
+    private val dynamicNrNameMap = HashMap<Int, String>()
+
     private val nrNameMap: Map<Int, String> by lazy {
         val m = HashMap<Int, String>()
         for (cat in categories) {
@@ -333,7 +336,7 @@ object StatusParser {
         m
     }
 
-    fun nrToName(nr: Int): String = nrNameMap[nr] ?: "nr$nr"
+    fun nrToName(nr: Int): String = dynamicNrNameMap[nr] ?: nrNameMap[nr] ?: "nr$nr"
 
     private val nrCategoryMap: Map<Int, String> by lazy {
         val m = HashMap<Int, String>()
@@ -346,4 +349,12 @@ object StatusParser {
     }
 
     fun syscallCategory(nr: Int): String = nrCategoryMap[nr] ?: "-"
+
+    internal fun updateDynamicNrNames(hooks: List<HookInfo>) {
+        for (h in hooks) {
+            if (h.nr >= 0 && h.name.isNotBlank()) {
+                dynamicNrNameMap[h.nr] = h.name.removePrefix("sys_")
+            }
+        }
+    }
 }

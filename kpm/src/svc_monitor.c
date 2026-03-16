@@ -75,7 +75,7 @@ KPM_DESCRIPTION("Enhanced ARM64 SVC syscall monitor with deep arg parsing");
 #define DESC_BUF_SIZE   1024      // 参数描述字符串缓冲区（v8.1 从小 buffer 扩大到 1024）
 #define PATH_BUF_SIZE   1024      // 路径字符串缓冲区
 #define SMALL_BUF       128
-#define DATA_PREVIEW    64        // write/sendto 的数据预览最多看前 64 字节
+#define DATA_PREVIEW    128       // read/write/sendto 的数据预览最多看前 128 字节
 
 /* ================================================================
  * Syscall name table (ARM64, 0-291)
@@ -191,6 +191,10 @@ static const char *get_syscall_name(int nr)
 {
     if (nr == 435) return "clone3";
     if (nr == -1) return "do_filp_open";
+    if (nr >= 0 && nr < 460) {
+        const char *n = syscall_name_table[nr].name;
+        if (n && n[0]) return n;
+    }
     if (nr >= 0 && nr < SYSCALL_NAME_MAX && syscall_names[nr])
         return syscall_names[nr];
     return "unknown";
@@ -204,6 +208,17 @@ static volatile int g_target_uid = -1;       // UID 过滤，-1=全部，>=0=只
 static volatile unsigned long g_nr_bitmap[BITMAP_LONGS]; // 位图：哪些 syscall NR 要记录
 static volatile unsigned int g_seq = 0;      // 事件序列号（全局自增）
 static volatile unsigned int g_total = 0;    // 总事件计数
+
+/* read(2) needs after-hook to dump user buffer, so we cache entry args by TID */
+#define READ_CTX_SLOTS 2048
+typedef struct {
+    int pid;
+    int tgid;
+    int fd;
+    unsigned long buf;
+    unsigned long count;
+} read_ctx_t;
+static read_ctx_t g_read_ctx[READ_CTX_SLOTS];
 
 /* Hook tracking */
 #define HOOK_INLINE  1
@@ -301,6 +316,7 @@ static inline unsigned long strip_ptr(unsigned long v)
 
 static inline int is_user_addr(unsigned long v)
 {
+    v = strip_ptr(v);
     return v >= 0x1000UL && v <= 0x0000FFFFFFFFFFFFUL;
 }
 
@@ -432,7 +448,8 @@ static inline void ev_unlock(void)
  * ================================================================ */
 static void safe_copy_user_str(char *dst, unsigned long uptr, int maxlen)
 {
-    if (!uptr || uptr < 0x1000UL || uptr > 0x7ffffffffff0UL) {
+    uptr = strip_ptr(uptr);
+    if (!is_user_addr(uptr)) {
         dst[0] = '\0';
         return;
     }
@@ -447,18 +464,23 @@ static void safe_copy_user_str(char *dst, unsigned long uptr, int maxlen)
 /* Read raw bytes from user-space, return bytes actually read (0 on fail) */
 static int safe_copy_user_bytes(char *dst, unsigned long uptr, int maxlen)
 {
-    (void)dst;
-    (void)uptr;
-    (void)maxlen;
-    return 0;
+    unsigned long not_copied;
+    uptr = strip_ptr(uptr);
+    if (!dst || maxlen <= 0) return 0;
+    if (!g_copy_from_user) return 0;
+    if (!is_user_addr(uptr)) return 0;
+    if (maxlen > 4096) maxlen = 4096;
+    not_copied = g_copy_from_user(dst, (const void __user *)uptr, (unsigned long)maxlen);
+    if (not_copied >= (unsigned long)maxlen) return 0;
+    return (int)((unsigned long)maxlen - not_copied);
 }
 
 /* Read a user-space pointer (unsigned long) from user address */
 static unsigned long safe_read_user_ptr(unsigned long uptr)
 {
     unsigned long val = 0;
-    if (!uptr || uptr < 0x1000UL || uptr > 0x7ffffffffff0UL)
-        return 0;
+    uptr = strip_ptr(uptr);
+    if (!is_user_addr(uptr)) return 0;
     if (safe_copy_user_bytes((char *)&val, uptr, 8) != 8) return 0;
     return val;
 }
@@ -629,37 +651,65 @@ static int parse_sockaddr(char *buf, int blen, unsigned long uptr, int addrlen)
  * ================================================================ */
 static int data_preview(char *buf, int blen, unsigned long uptr, unsigned long datalen)
 {
-    unsigned char tmp[DATA_PREVIEW + 1];
-    char ascii[DATA_PREVIEW + 1];
+    unsigned char tmp[DATA_PREVIEW];
     int n = 0;
-    int to_read = datalen < DATA_PREVIEW ? (int)datalen : DATA_PREVIEW;
+    int to_read = (datalen < DATA_PREVIEW) ? (int)datalen : DATA_PREVIEW;
 
-    if (!uptr || uptr < 0x1000UL || to_read <= 0)
+    if (!is_user_addr(uptr) || to_read <= 0)
         return snprintf(buf, blen, "buf=0x%lx", uptr);
 
     int got = safe_copy_user_bytes((char *)tmp, uptr, to_read);
     if (got <= 0)
         return snprintf(buf, blen, "buf=0x%lx", uptr);
 
-    /* Build hex + ascii preview */
-    n += snprintf(buf + n, blen - n, "data[%d/%lu]=", got, datalen);
-
-    /* Hex portion (show first 32 bytes max in hex) */
-    int hexshow = got < 32 ? got : 32;
-    int i;
-    for (i = 0; i < hexshow && n < blen - 4; i++) {
-        n += snprintf(buf + n, blen - n, "%02x", tmp[i]);
-        if ((i & 3) == 3 && i < hexshow - 1) buf[n++] = ' ';
+    n += snprintf(buf + n, blen - n, "data[%d/%lu]\n", got, datalen);
+    {
+        int off;
+        for (off = 0; off < got && n < blen - 64; off += 16) {
+            int i;
+            n += snprintf(buf + n, blen - n, "%04x: ", off);
+            for (i = 0; i < 16; i++) {
+                if (off + i < got) n += snprintf(buf + n, blen - n, "%02x ", tmp[off + i]);
+                else n += snprintf(buf + n, blen - n, "   ");
+            }
+            n += snprintf(buf + n, blen - n, " |");
+            for (i = 0; i < 16 && off + i < got && n < blen - 4; i++) {
+                unsigned char c = tmp[off + i];
+                buf[n++] = (c >= 0x20 && c < 0x7f) ? (char)c : '.';
+            }
+            buf[n++] = '|';
+            buf[n++] = '\n';
+        }
+        if (n < blen - 32) {
+            int i = 0;
+            int segs = 0;
+            n += snprintf(buf + n, blen - n, "strings=");
+            while (i < got && n < blen - 4) {
+                int j = i;
+                while (j < got) {
+                    unsigned char c = tmp[j];
+                    if (c < 0x20 || c >= 0x7f) break;
+                    j++;
+                }
+                if (j - i >= 4) {
+                    int k;
+                    if (segs > 0) n += snprintf(buf + n, blen - n, " | ");
+                    for (k = i; k < j && n < blen - 2; k++) {
+                        unsigned char c = tmp[k];
+                        if (c == '\\' || c == '"') {
+                            if (n < blen - 2) buf[n++] = '\\';
+                        }
+                        buf[n++] = (char)c;
+                    }
+                    segs++;
+                    if (segs >= 8) break;
+                }
+                i = (j > i) ? j + 1 : i + 1;
+            }
+            buf[n++] = '\n';
+        }
+        if (n > 0 && n < blen) buf[n - 1] = '\0';
     }
-
-    /* ASCII portion */
-    n += snprintf(buf + n, blen - n, " |");
-    for (i = 0; i < got && n < blen - 4; i++) {
-        char c = (tmp[i] >= 0x20 && tmp[i] < 0x7f) ? (char)tmp[i] : '.';
-        buf[n++] = c;
-    }
-    buf[n++] = '|';
-    buf[n] = '\0';
     return n;
 }
 
@@ -1708,6 +1758,18 @@ static void before_generic(hook_fargs4_t *args, void *udata)
     /* Build detailed description */
     describe_args(nr, a0, a1, a2, a3, a4, a5, desc, sizeof(desc));
 
+    if (nr == __NR_read) {
+        unsigned int tid = (unsigned int)raw_syscall0(__NR_gettid);
+        unsigned int tgid = (unsigned int)raw_syscall0(__NR_getpid);
+        unsigned int slot = (tid * 2654435761u) & (READ_CTX_SLOTS - 1);
+        g_read_ctx[slot].pid = (int)tid;
+        g_read_ctx[slot].tgid = (int)tgid;
+        g_read_ctx[slot].fd = (int)a0;
+        g_read_ctx[slot].buf = strip_ptr(a1);
+        g_read_ctx[slot].count = a2;
+        return;
+    }
+
     push_event(nr, uid, a0, a1, a2, a3, a4, a5, pc, caller, fp, sp, bt_depth, bt, clone_fn, 0, desc);
 }
 
@@ -1934,9 +1996,79 @@ static void after_clone_ret(hook_fargs0_t *args, void *udata)
                "clone_ret");
 }
 
+static void after_read_ret(hook_fargs0_t *args, void *udata)
+{
+    int nr = (int)(unsigned long)udata;
+    long ret = (long)args->ret;
+    int uid;
+    unsigned long a0 = 0, a1 = 0, a2 = 0;
+    unsigned long pc = 0;
+    unsigned long caller = 0;
+    unsigned long fp = 0;
+    unsigned long sp = 0;
+    unsigned long bt[MAX_BT];
+    unsigned int bt_depth = 0;
+    char desc[DESC_BUF_SIZE];
+    int n = 0;
+    unsigned int tid;
+    unsigned int tgid;
+    unsigned int slot;
+
+    if (!g_enabled) return;
+    uid = (int)current_uid();
+    if (g_target_uid >= 0 && uid != g_target_uid) return;
+    if (nr != __NR_read) return;
+    if (!bitmap_test(g_nr_bitmap, nr)) return;
+
+    tid = (unsigned int)raw_syscall0(__NR_gettid);
+    tgid = (unsigned int)raw_syscall0(__NR_getpid);
+    slot = (tid * 2654435761u) & (READ_CTX_SLOTS - 1);
+    if (g_read_ctx[slot].pid == (int)tid && g_read_ctx[slot].tgid == (int)tgid) {
+        a0 = (unsigned long)g_read_ctx[slot].fd;
+        a1 = g_read_ctx[slot].buf;
+        a2 = g_read_ctx[slot].count;
+    } else {
+        a0 = syscall_argn(args, 0);
+        a1 = syscall_argn(args, 1);
+        a2 = syscall_argn(args, 2);
+    }
+
+    {
+        struct pt_regs *r = 0;
+        if (!r) r = _task_pt_reg(current);
+        if (r) {
+            pc = (unsigned long)r->pc;
+            caller = (unsigned long)r->regs[30];
+            fp = (unsigned long)r->regs[29];
+            sp = (unsigned long)r->sp;
+            memzero(bt, sizeof(bt));
+            bt_depth = unwind_user_fp(r, bt);
+        }
+    }
+
+    n = snprintf(desc, sizeof(desc), "fd=%d count=%lu ret=%ld\n", (int)a0, a2, ret);
+    if (ret > 0) {
+        unsigned long want = (unsigned long)ret;
+        if (want > a2) want = a2;
+        if (want > DATA_PREVIEW) want = DATA_PREVIEW;
+        if (want > 0 && n < (int)sizeof(desc) - 8) {
+            n += data_preview(desc + n, (int)sizeof(desc) - n, a1, want);
+        }
+    }
+
+    push_event(nr, uid,
+               a0, a1, a2, 0, 0, 0,
+               pc, caller, fp, sp,
+               bt_depth, bt,
+               0,
+               (unsigned long)ret,
+               desc);
+}
+
 static void *hook_after_for_nr(int nr)
 {
     if (nr == __NR_clone || nr == 435) return (void *)after_clone_ret;
+    if (nr == __NR_read) return (void *)after_read_ret;
     return (void *)0;
 }
 
@@ -2752,7 +2884,6 @@ static long svc_init(const char *args, const char *event, void *__user reserved)
         printk("svc_monitor: do_filp_open hook install failed\n");
     }
 
-    apply_preset("re_basic");
     printk("svc_monitor: ready, g_enabled=0 (waiting for APP)\n");
     return 0;
 }
